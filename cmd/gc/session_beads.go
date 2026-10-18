@@ -151,6 +151,30 @@ func findOpenSessionBeadBySessionName(store beads.Store, sessionName string) (be
 			return bead, true, nil
 		}
 	}
+	// The listing above is served from the CachingStore's active snapshot,
+	// which lags beads written by other processes (for example a bead created
+	// by `gc session wake` outside the controller). The session-name
+	// availability check reads backing history, so on a cache miss it would
+	// see that bead and reject every create while this lookup keeps missing
+	// it — the controller would retry the create each tick and leave the
+	// existing bead stuck in start-pending until the cache caught up. Read the
+	// exact session_name live so the existing owner is adopted instead; the
+	// live read also absorbs the row into the cache for later ticks.
+	live, err := store.List(beads.ListQuery{
+		Metadata: map[string]string{"session_name": sessionName},
+		Live:     true,
+	})
+	if err != nil {
+		return beads.Bead{}, false, err
+	}
+	for _, bead := range live {
+		if bead.Status == "closed" || !session.IsSessionBeadOrRepairable(bead) {
+			continue
+		}
+		if strings.TrimSpace(bead.Metadata["session_name"]) == sessionName {
+			return bead, true, nil
+		}
+	}
 	return beads.Bead{}, false, nil
 }
 
