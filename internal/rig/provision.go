@@ -122,9 +122,12 @@ func Provision(deps Deps, req ProvisionRequest) (config.Rig, ProvisionResult, er
 	if err != nil {
 		return config.Rig{}, result, err
 	}
-	deferred, err := initRigBeadsStore(deps, req, rigPath, plan.prefix, emit)
+	deferred, persistedStore, err := initRigBeadsStore(deps, req, rigPath, plan.prefix, emit)
 	if err != nil {
 		return config.Rig{}, result, removePartialBeadsStore(fs, rigPath, beadsStorePreexisting, err)
+	}
+	if persistedStore && !plan.reAdd && len(plan.nextCfg.Rigs) > 0 {
+		plan.nextCfg.Rigs[len(plan.nextCfg.Rigs)-1].StoreOwner = "bd"
 	}
 	result.Deferred = deferred
 
@@ -575,37 +578,44 @@ func emitRigBannerAndWarnings(deps Deps, req ProvisionRequest, plan rigMutationP
 }
 
 // initRigBeadsStore runs step 13's bead-store initialization and emits the
-// matching progress. --adopt optionally prepares provider state and only inits
-// under the store contract; a fresh add inits directly, falling back to the
-// deferred "init deferred to controller" path when InitStore punts (and the
-// store is GC_DOLT=skip or the deeper InitAndHook fails). It returns whether
-// init was deferred.
-func initRigBeadsStore(deps Deps, req ProvisionRequest, rigPath, prefix string, emit func(ProvisionStep)) (bool, error) {
+// matching progress. --adopt optionally prepares provider state and, under the
+// store contract, initializes only stores without persisted provider identity;
+// a fresh add inits directly, falling back to the deferred "init deferred to
+// controller" path when InitStore punts (and the store is GC_DOLT=skip or the
+// deeper InitAndHook fails). It returns whether init was deferred.
+func initRigBeadsStore(deps Deps, req ProvisionRequest, rigPath, prefix string, emit func(ProvisionStep)) (deferred, persistedStore bool, err error) {
 	cityPath := deps.CityPath
 	storeContract := func() bool { return deps.StoreContract != nil && deps.StoreContract(cityPath) }
 	doltSkip := func() bool { return deps.DoltSkip != nil && deps.DoltSkip() }
-
-	var deferred bool
-	var err error
 	if req.Adopt {
 		if deps.PrepareAdopt != nil {
 			if err := deps.PrepareAdopt(cityPath, rigPath); err != nil {
-				return false, fmt.Errorf("prepare adopted rig store: %w", err)
+				return false, false, fmt.Errorf("prepare adopted rig store: %w", err)
 			}
 		}
 		if storeContract() {
+			if deps.AdoptExistingStore != nil {
+				persisted, err := deps.AdoptExistingStore(cityPath, rigPath)
+				if err != nil {
+					return false, false, fmt.Errorf("adopt existing rig store: %w", err)
+				}
+				if persisted {
+					emit(ProvisionStep{Name: "beads-init", Detail: "  Adopted existing beads database; provider init skipped; types.custom not registered"})
+					return false, true, nil
+				}
+			}
 			deferred, err = deps.InitStore(cityPath, rigPath, prefix)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 		}
 		emit(ProvisionStep{Name: "beads-init", Detail: "  Adopted existing beads database"})
-		return deferred, nil
+		return deferred, false, nil
 	}
 
 	deferred, err = deps.InitStore(cityPath, rigPath, prefix)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if deferred {
 		if storeContract() && doltSkip() {
@@ -618,7 +628,7 @@ func initRigBeadsStore(deps Deps, req ProvisionRequest, rigPath, prefix string, 
 	} else {
 		emit(ProvisionStep{Name: "beads-init", Detail: "  Initialized beads database"})
 	}
-	return deferred, nil
+	return deferred, false, nil
 }
 
 // writeRigTopology runs steps 15-16 under the caller's topology snapshot: it

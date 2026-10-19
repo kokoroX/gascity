@@ -100,6 +100,9 @@ type Deps struct {
 	// PrepareAdopt readies provider state for --adopt (cmd/gc
 	// prepareRigAdoptProviderState). nil = skip; only consulted when req.Adopt.
 	PrepareAdopt func(cityPath, rigPath string) error
+	// AdoptExistingStore reports whether an adopted store has durable provider
+	// identity and installs its hooks when it does. nil = no persisted identity.
+	AdoptExistingStore func(cityPath, rigPath string) (persisted bool, err error)
 	// StoreContract reports whether the city uses the bd store contract (cmd/gc
 	// cityUsesBdStoreContract). It is a func, not a bool, because InitStore can
 	// seed provider state mid-flow and the flow re-evaluates it after init. nil =
