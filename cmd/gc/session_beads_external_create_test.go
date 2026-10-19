@@ -122,3 +122,89 @@ func TestSyncSessionBeads_AdoptsExternallyCreatedNamedSessionMissingFromCache(t 
 		t.Fatalf("second tick created extra beads: %d", len(all))
 	}
 }
+
+// commitAfterFirstLiveList models an out-of-controller create that commits
+// right after the controller's first live session_name lookup misses, i.e.
+// between that lookup and the identifier-locked availability check.
+type commitAfterFirstLiveList struct {
+	beads.Store
+	pending   *beads.Bead
+	committed *beads.Bead
+}
+
+func (s *commitAfterFirstLiveList) List(query beads.ListQuery) ([]beads.Bead, error) {
+	items, err := s.Store.List(query)
+	if query.Live && s.pending != nil {
+		created, createErr := s.Store.Create(*s.pending)
+		if createErr != nil {
+			return nil, createErr
+		}
+		s.pending = nil
+		s.committed = &created
+	}
+	return items, err
+}
+
+func TestSyncSessionBeads_AdoptsNamedSessionCommittedBeforeIdentifierLock(t *testing.T) {
+	backing := &commitAfterFirstLiveList{
+		Store: beads.NewMemStore(),
+		pending: &beads.Bead{
+			Title:  "myrig/refinery",
+			Type:   sessionBeadType,
+			Labels: []string{sessionBeadLabel, "template:myrig/refinery"},
+			Metadata: map[string]string{
+				"session_name":               "myrig--refinery",
+				"session_name_explicit":      "true",
+				"alias":                      "myrig/refinery",
+				"template":                   "myrig/refinery",
+				"session_origin":             "named",
+				"state":                      "start-pending",
+				"pending_create_claim":       "true",
+				namedSessionMetadataKey:      "true",
+				namedSessionIdentityMetadata: "myrig/refinery",
+				namedSessionModeMetadata:     "on_demand",
+			},
+		},
+	}
+	store := beads.NewCachingStoreForTest(backing, nil)
+	if err := store.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	clk := &clock.Fake{Time: time.Date(2026, 10, 19, 2, 27, 12, 0, time.UTC)}
+	sp := runtime.NewFake()
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		Agents:        []config.Agent{{Name: "refinery", Dir: "myrig"}},
+		NamedSessions: []config.NamedSession{{Template: "refinery", Dir: "myrig", Mode: "on_demand"}},
+	}
+	ds := map[string]TemplateParams{
+		"myrig--refinery": {
+			TemplateName:            "myrig/refinery",
+			InstanceName:            "myrig/refinery",
+			Alias:                   "myrig/refinery",
+			Command:                 "claude",
+			ConfiguredNamedIdentity: "myrig/refinery",
+			ConfiguredNamedMode:     "on_demand",
+		},
+	}
+
+	var stderr bytes.Buffer
+	index := syncSessionBeads("", store, ds, sp, allConfiguredDS(ds), cfg, clk, &stderr, false)
+
+	if backing.committed == nil {
+		t.Fatal("precondition: the racing create never committed")
+	}
+	if strings.Contains(stderr.String(), "already belongs to") || strings.Contains(stderr.String(), "unavailable") {
+		t.Fatalf("sync collided with the bead committed before the lock:\n%s", stderr.String())
+	}
+	if got := index["myrig--refinery"]; got != backing.committed.ID {
+		t.Fatalf("open index for myrig--refinery = %q, want %s (stderr: %s)", got, backing.committed.ID, stderr.String())
+	}
+	all, err := backing.Store.List(beads.ListQuery{Type: sessionBeadType, IncludeClosed: true})
+	if err != nil {
+		t.Fatalf("listing backing session beads: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected only the racing bead, got %d", len(all))
+	}
+}
