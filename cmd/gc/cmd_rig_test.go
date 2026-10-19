@@ -2945,6 +2945,82 @@ func TestDoRigAdd_AdoptWithBdContractInvokesInitAndHook(t *testing.T) {
 	}
 }
 
+func TestDoRigAdd_AdoptPersistedIdentitySkipsInit(t *testing.T) {
+	cityPath := t.TempDir()
+	writeSchema2RigCity(t, cityPath, "test-city", "[workspace]\n", "")
+	t.Setenv("GC_BEADS", "exec:"+filepath.Join(cityPath, "gc-beads-bd"))
+	t.Setenv("GC_DOLT", "")
+
+	origEnsure := initDirIfReadyEnsureBeadsProvider
+	origInit := initDirIfReadyInitAndHookDir
+	origWait := initDirIfReadyWaitForManagedDolt
+	t.Cleanup(func() {
+		initDirIfReadyEnsureBeadsProvider = origEnsure
+		initDirIfReadyInitAndHookDir = origInit
+		initDirIfReadyWaitForManagedDolt = origWait
+	})
+	initDirIfReadyEnsureBeadsProvider = func(_ string) error { return nil }
+	initDirIfReadyWaitForManagedDolt = func(_ string, _ time.Duration) error { return nil }
+	var initCalls []string
+	initDirIfReadyInitAndHookDir = func(_, dir, _ string) error {
+		initCalls = append(initCalls, dir)
+		return nil
+	}
+
+	rigPath := filepath.Join(t.TempDir(), "adopted-rig")
+	if err := os.MkdirAll(filepath.Join(rigPath, ".beads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{"name":"adopted-rig","issue_prefix":"jikerental","dolt_database":"JikeRental_p3a","project_id":"2c3e06b7-0000-0000-0000-000000000000","dolt_mode":"server","backend":"dolt"}`
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "metadata.json"), []byte(metadata), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configYaml := "issue-prefix: JikeRental\n" +
+		"gc.endpoint_origin: explicit\n" +
+		"gc.endpoint_status: unverified\n" +
+		"dolt.host: host.docker.internal\n" +
+		"dolt.port: 3307\n" +
+		"dolt.user: p3drill\n"
+	configPath := filepath.Join(rigPath, ".beads", "config.yaml")
+	if err := os.WriteFile(configPath, []byte(configYaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doRigAdd(fsys.OSFS{}, cityPath, rigPath, nil, "", "JikeRental", "", false, true, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doRigAdd --adopt returned %d, stderr: %s", code, stderr.String())
+	}
+	if len(initCalls) != 0 {
+		t.Fatalf("InitStore ran for adopted persisted identity: %v", initCalls)
+	}
+	gotConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotConfig) != configYaml {
+		t.Fatalf("config.yaml changed:\n got: %q\nwant: %q", gotConfig, configYaml)
+	}
+	for _, want := range []string{"Adopted existing beads database", "provider init skipped"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout missing %q: %s", want, stdout.String())
+		}
+	}
+	cfg, err := config.Load(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner string
+	for _, r := range cfg.Rigs {
+		if r.Name == "adopted-rig" {
+			owner = r.StoreOwner
+		}
+	}
+	if owner != "bd" {
+		t.Fatalf("store_owner = %q, want bd; rigs=%+v", owner, cfg.Rigs)
+	}
+}
+
 // TestDoRigAdd_AdoptWithBdContractProvider_NonAdoptControlInvokesInit is a
 // control: the same stubbed harness wired through a NON-adopt add also calls
 // initAndHookDir, proving that the empty-initCalls failure above (pre-fix) was

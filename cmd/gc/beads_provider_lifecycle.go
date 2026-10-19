@@ -188,6 +188,28 @@ func isRetryableManagedDoltLifecycleError(err error) bool {
 //   health        — check provider health
 //   stop          — stop the backing service
 
+// startBeadsLifecycleInitRigDir is initAndHookDir; tests replace it.
+var startBeadsLifecycleInitRigDir = initAndHookDir
+
+// initRigScopesForStart inits and hooks each rig scope at start. A rig that adopted an existing bd store (store_owner = "bd") gets hooks only: gc never runs provider init against a database it did not create.
+func initRigScopesForStart(cityPath string, cfg *config.City) error {
+	for i := range cfg.Rigs {
+		if strings.TrimSpace(cfg.Rigs[i].Path) == "" {
+			continue
+		}
+		if cfg.Rigs[i].StoreOwnedByBd() {
+			if err := installBeadHooks(cfg.Rigs[i].Path, cityPath); err != nil {
+				return fmt.Errorf("install hooks for rig %q: %w", cfg.Rigs[i].Name, err)
+			}
+			continue
+		}
+		if err := startBeadsLifecycleInitRigDir(cityPath, cfg.Rigs[i].Path, cfg.Rigs[i].EffectivePrefix()); err != nil {
+			return fmt.Errorf("init rig %q beads: %w", cfg.Rigs[i].Name, err)
+		}
+	}
+	return nil
+}
+
 // startBeadsLifecycle runs the full bead store startup sequence:
 // start → init+hooks(city) → init+hooks(each rig) → regenerate routes.
 // Called by gc start and controller config reload. Rigs must have absolute
@@ -281,14 +303,8 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 	if err := initAndHookDir(cityPath, cityPath, beadsPrefix); err != nil {
 		return fmt.Errorf("init city beads: %w", err)
 	}
-	for i := range cfg.Rigs {
-		if strings.TrimSpace(cfg.Rigs[i].Path) == "" {
-			continue
-		}
-		prefix := cfg.Rigs[i].EffectivePrefix()
-		if err := initAndHookDir(cityPath, cfg.Rigs[i].Path, prefix); err != nil {
-			return fmt.Errorf("init rig %q beads: %w", cfg.Rigs[i].Name, err)
-		}
+	if err := initRigScopesForStart(cityPath, cfg); err != nil {
+		return err
 	}
 	if err := normalizeCanonicalBdScopeFiles(cityPath, cfg, stderr); err != nil {
 		return err
@@ -2937,6 +2953,9 @@ func normalizeCanonicalBdScopeFiles(cityPath string, cfg *config.City, warns ...
 		}
 	}
 	for i := range cfg.Rigs {
+		if cfg.Rigs[i].StoreOwnedByBd() {
+			continue
+		}
 		providerOwned, err := scopeProviderOwned(cityPath, cfg.Rigs[i].Path)
 		if err != nil {
 			return fmt.Errorf("classifying rig %q provider ownership: %w", cfg.Rigs[i].Name, err)
@@ -2991,6 +3010,9 @@ func syncConfiguredDoltPortFiles(cityPath string, cityDolt config.DoltConfig, ci
 	}
 	anyRigUsesBd := false
 	for _, rig := range rigs {
+		if rig.StoreOwnedByBd() {
+			continue
+		}
 		if strings.TrimSpace(rig.Path) == "" {
 			continue
 		}
@@ -3038,6 +3060,9 @@ func syncConfiguredDoltPortFiles(cityPath string, cityDolt config.DoltConfig, ci
 	}
 
 	for i := range rigs {
+		if rigs[i].StoreOwnedByBd() {
+			continue
+		}
 		rig := normalizedRigConfig(cityPath, rigs[i])
 		if strings.TrimSpace(rig.Path) == "" {
 			continue

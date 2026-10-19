@@ -588,6 +588,10 @@ type Rig struct {
 	Path string `toml:"path,omitempty"`
 	// Prefix overrides the auto-derived bead ID prefix for this rig.
 	Prefix string `toml:"prefix,omitempty"`
+	// StoreOwner records who owns this rig's bead store. "bd" means the rig
+	// adopted an existing bd database: gc installs hooks only and never runs
+	// provider init or rewrites the rig's .beads files. Empty means gc-managed.
+	StoreOwner string `toml:"store_owner,omitempty"`
 	// DefaultBranch is the rig repository's mainline branch (e.g. "main",
 	// "master", "develop"). When set, routing formulas use this as the
 	// default merge target instead of probing origin/HEAD at sling time.
@@ -660,6 +664,9 @@ type Rig struct {
 	// but loses to --var flags.
 	FormulaVars map[string]string `toml:"formula_vars,omitempty"`
 }
+
+// StoreOwnedByBd reports whether bd owns this rig's bead store.
+func (r Rig) StoreOwnedByBd() bool { return strings.TrimSpace(r.StoreOwner) == "bd" }
 
 // AgentOverride modifies a pack-stamped agent for a specific rig.
 // Uses pointer fields to distinguish "not set" from "set to zero value."
