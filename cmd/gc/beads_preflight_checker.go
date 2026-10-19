@@ -16,9 +16,29 @@ import (
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/beads/proxyendpoint"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/doltauth"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/rollout"
 )
+
+var preflightDatabaseProjectIDProbe = func(target contract.DoltConnectionTarget, user, password string) (string, bool, error) {
+	var db *sql.DB
+	var err error
+	if target.Socket != "" {
+		db, err = managedDoltOpenDatabaseSocketWithPassword(target.Socket, user, password, target.Database)
+	} else {
+		db, err = managedDoltOpenDatabaseWithPassword(target.Host, target.Port, user, password, target.Database)
+	}
+	if err != nil {
+		return "", false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		return "", false, err
+	}
+	return readDatabaseProjectID(ctx, db)
+}
 
 // newBeadsPreflightChecker builds the native-store preflight for a scope of
 // the city at cityPath. cfg is that city's config when the caller has it in
@@ -219,7 +239,7 @@ func warnAllowSchemaBehindMigrateUnresolved(cityPath string, err error) {
 // _project_id mismatch) instead of degrading the scope off the native store.
 func preflightIdentityDeferredReader(cityPath string) func(scope string) bool {
 	return func(scope string) bool {
-		target, ok, err := canonicalScopeDoltTarget(cityPath, scope)
+		target, ok, err := preflightScopeDoltTarget(cityPath, scope)
 		if err != nil || !ok {
 			return false
 		}
@@ -227,9 +247,25 @@ func preflightIdentityDeferredReader(cityPath string) func(scope string) bool {
 	}
 }
 
+func preflightScopeDoltTarget(cityPath, scope string) (contract.DoltConnectionTarget, bool, error) {
+	target, ok, err := canonicalScopeDoltTarget(cityPath, scope)
+	if err != nil || ok {
+		return target, ok, err
+	}
+	bdOwnedDirect, err := scopeIsBdOwnedDirectExternal(cityPath, scope)
+	if err != nil || !bdOwnedDirect {
+		return contract.DoltConnectionTarget{}, false, err
+	}
+	target, err = bdOwnedDirectRigTarget(scope)
+	if err != nil {
+		return contract.DoltConnectionTarget{}, false, err
+	}
+	return target, true, nil
+}
+
 func preflightDatabaseProjectIDReader(cityPath string) func(scope string) (string, bool, error) {
 	return func(scope string) (string, bool, error) {
-		target, ok, err := canonicalScopeDoltTarget(cityPath, scope)
+		target, ok, err := preflightScopeDoltTarget(cityPath, scope)
 		if err != nil || !ok {
 			return "", false, err
 		}
@@ -238,22 +274,8 @@ func preflightDatabaseProjectIDReader(cityPath string) func(scope string) (strin
 			// there is no direct SQL endpoint to probe here.
 			return "", false, nil
 		}
-		// Pooled handle owned by internal/doltpool; do not Close.
-		var db *sql.DB
-		if target.Socket != "" {
-			db, err = managedDoltOpenDatabaseSocket(target.Socket, target.User, target.Database)
-		} else {
-			db, err = managedDoltOpenDatabase(target.Host, target.Port, target.User, target.Database)
-		}
-		if err != nil {
-			return "", false, err
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := db.PingContext(ctx); err != nil {
-			return "", false, err
-		}
-		return readDatabaseProjectID(ctx, db)
+		authScope := doltauth.AuthScopeRoot(cityPath, scope, target)
+		auth := doltauth.ResolveScopedFromEnv(authScope, target.User, map[string]string{}, os.Getenv)
+		return preflightDatabaseProjectIDProbe(target, auth.User, auth.Password)
 	}
 }

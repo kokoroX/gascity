@@ -1840,6 +1840,21 @@ func applyResolvedRigDoltEnvContext(ctx context.Context, env map[string]string, 
 		mirrorBeadsDoltScopeEnv(env, target)
 		return nil
 	}
+	bdOwnedDirect, err := scopeIsBdOwnedDirectExternal(cityPath, rigPath)
+	if err != nil {
+		return err
+	}
+	if bdOwnedDirect {
+		target, err := bdOwnedDirectRigTarget(rigPath)
+		if err != nil {
+			return err
+		}
+		applyCanonicalDoltTargetEnv(env, target)
+		clearProjectedDoltPasswordEnv(env)
+		applyResolvedDoltAuthEnv(env, rigPath, "")
+		mirrorBeadsDoltScopeEnv(env, target)
+		return nil
+	}
 	// Rigs without local endpoint authority inherit the resolved city target.
 	// A minimal local .beads/config.yaml must not suppress valid city compat fallback.
 	return applyResolvedCityDoltEnvContext(ctx, env, cityPath, allowRecovery)

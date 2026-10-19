@@ -36,7 +36,7 @@ func AuthScopeRoot(cityRoot, scopeRoot string, target contract.DoltConnectionTar
 func Resolve(scopeRoot, fallbackUser, host string, port int) Resolved {
 	overridePath := strings.TrimSpace(os.Getenv("BEADS_CREDENTIALS_FILE"))
 	return Resolved{
-		User:                    resolveUser(fallbackUser),
+		User:                    resolveUser(scopeRoot, fallbackUser),
 		Password:                resolvePassword(scopeRoot, host, port, overridePath),
 		CredentialsFileOverride: overridePath,
 	}
@@ -75,14 +75,17 @@ func resolveFromEnv(scopeRoot, fallbackUser string, env map[string]string, ambie
 	}
 	envPass := strings.TrimSpace(env["BEADS_DOLT_PASSWORD"])
 	return Resolved{
-		User:                    resolveUser(fallbackUser),
+		User:                    resolveUser(scopeRoot, fallbackUser),
 		Password:                resolvePasswordWithEnv(envPass, scopeRoot, host, port, overridePath, allowAmbientBeadsPassword),
 		CredentialsFileOverride: overridePath,
 	}
 }
 
-func resolveUser(fallbackUser string) string {
+func resolveUser(scopeRoot, fallbackUser string) string {
 	if user := strings.TrimSpace(os.Getenv("GC_DOLT_USER")); user != "" {
+		return user
+	}
+	if user := ReadStoreLocalUser(scopeRoot); user != "" {
 		return user
 	}
 	return strings.TrimSpace(fallbackUser)
@@ -123,10 +126,19 @@ func resolvePasswordWithEnv(envPass, scopeRoot, host string, port int, overrideP
 
 // ReadStoreLocalPassword returns the BEADS_DOLT_PASSWORD from a scope-local .beads/.env file.
 func ReadStoreLocalPassword(scopeRoot string) string {
+	return readStoreLocalValue(scopeRoot, "BEADS_DOLT_PASSWORD")
+}
+
+// ReadStoreLocalUser returns the BEADS_DOLT_SERVER_USER from a scope-local .beads/.env file.
+func ReadStoreLocalUser(scopeRoot string) string {
+	return readStoreLocalValue(scopeRoot, "BEADS_DOLT_SERVER_USER")
+}
+
+func readStoreLocalValue(scopeRoot, key string) string {
 	if strings.TrimSpace(scopeRoot) == "" {
 		return ""
 	}
-	return readSimpleEnvValue(filepath.Join(scopeRoot, ".beads", ".env"), "BEADS_DOLT_PASSWORD")
+	return readSimpleEnvValue(filepath.Join(scopeRoot, ".beads", ".env"), key)
 }
 
 func readSimpleEnvValue(path, key string) string {

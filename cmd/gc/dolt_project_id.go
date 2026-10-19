@@ -16,6 +16,7 @@ import (
 
 	gcapi "github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beads/contract"
+	"github.com/gastownhall/gascity/internal/doltauth"
 	"github.com/gastownhall/gascity/internal/doltpool"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -495,6 +496,10 @@ func formatLegacyL2L3MismatchError(l2, l3 string) error {
 // NOT Close it. The previous per-call sql.Open+Close pattern here was the
 // 2,618-TIME_WAIT hotspot (city-scale plan item 1.2).
 func managedDoltOpenDatabase(host, port, user, database string) (*sql.DB, error) {
+	return managedDoltOpenDatabaseWithPassword(host, port, user, managedDoltPassword(), database)
+}
+
+func managedDoltOpenDatabaseWithPassword(host, port, user, password, database string) (*sql.DB, error) {
 	host = managedDoltConnectHost(host)
 	port = strings.TrimSpace(port)
 	if port == "" {
@@ -508,10 +513,14 @@ func managedDoltOpenDatabase(host, port, user, database string) (*sql.DB, error)
 	if database == "" {
 		return nil, fmt.Errorf("missing database")
 	}
-	return doltpool.Open(host, port, user, managedDoltPassword(), database)
+	return doltpool.Open(host, port, user, password, database)
 }
 
 func managedDoltOpenDatabaseSocket(socket, user, database string) (*sql.DB, error) {
+	return managedDoltOpenDatabaseSocketWithPassword(socket, user, managedDoltPassword(), database)
+}
+
+func managedDoltOpenDatabaseSocketWithPassword(socket, user, password, database string) (*sql.DB, error) {
 	socket = strings.TrimSpace(socket)
 	if socket == "" {
 		return nil, fmt.Errorf("missing socket")
@@ -524,7 +533,41 @@ func managedDoltOpenDatabaseSocket(socket, user, database string) (*sql.DB, erro
 	if database == "" {
 		return nil, fmt.Errorf("missing database")
 	}
-	return doltpool.OpenSocket(socket, user, managedDoltPassword(), database)
+	return doltpool.OpenSocket(socket, user, password, database)
+}
+
+func bdOwnedDirectRigTarget(rigPath string) (contract.DoltConnectionTarget, error) {
+	metadata, ok, err := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(rigPath))
+	if err != nil {
+		return contract.DoltConnectionTarget{}, err
+	}
+	if !ok {
+		return contract.DoltConnectionTarget{}, fmt.Errorf("missing bd-owned rig metadata at %s", scopeMetadataJSONPath(rigPath))
+	}
+	binding, bound, err := contract.ReadPersistedServerBinding(fsys.OSFS{}, scopeMetadataJSONPath(rigPath))
+	if err != nil {
+		return contract.DoltConnectionTarget{}, fmt.Errorf("read bd-owned rig server binding: %w", err)
+	}
+	if !bound {
+		return contract.DoltConnectionTarget{}, fmt.Errorf("missing bd-owned rig server binding in %s", scopeMetadataJSONPath(rigPath))
+	}
+	port := strings.TrimSpace(binding.DoltPort)
+	if portData, readErr := os.ReadFile(filepath.Join(rigPath, ".beads", "dolt-server.port")); readErr == nil {
+		if value := strings.TrimSpace(string(portData)); value != "" {
+			port = value
+		}
+	} else if !os.IsNotExist(readErr) {
+		return contract.DoltConnectionTarget{}, fmt.Errorf("read bd-owned rig Dolt port: %w", readErr)
+	}
+	auth := doltauth.ResolveScopedFromEnv(rigPath, "", map[string]string{}, os.Getenv)
+	return contract.DoltConnectionTarget{
+		Host:           strings.TrimSpace(binding.DoltHost),
+		Port:           port,
+		Database:       metadata.DoltDatabase,
+		User:           auth.User,
+		EndpointOrigin: contract.EndpointOriginExplicit,
+		External:       true,
+	}, nil
 }
 
 func readManagedMetadataProjectID(metadataPath string) (string, error) {

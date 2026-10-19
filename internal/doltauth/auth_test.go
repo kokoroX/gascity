@@ -51,6 +51,28 @@ func TestResolvePrefersProcessOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveUsesStoreLocalUserBeforeFallback(t *testing.T) {
+	scopeRoot := t.TempDir()
+	writeStoreAuth(t, scopeRoot, "BEADS_DOLT_SERVER_USER=store-user\n")
+	t.Setenv("GC_DOLT_USER", "")
+
+	resolved := ResolveScopedFromEnv(scopeRoot, "fallback-user", map[string]string{}, os.Getenv)
+	if resolved.User != "store-user" {
+		t.Fatalf("User = %q, want store-user", resolved.User)
+	}
+}
+
+func TestResolveScopedFromEnvPrefersGCUserOverStoreLocalUser(t *testing.T) {
+	scopeRoot := t.TempDir()
+	writeStoreAuth(t, scopeRoot, "BEADS_DOLT_SERVER_USER=store-user\n")
+	t.Setenv("GC_DOLT_USER", "override-user")
+
+	resolved := ResolveScopedFromEnv(scopeRoot, "fallback-user", map[string]string{}, os.Getenv)
+	if resolved.User != "override-user" {
+		t.Fatalf("User = %q, want override-user", resolved.User)
+	}
+}
+
 func TestResolveUsesStoreLocalPasswordBeforeCredentialsFile(t *testing.T) {
 	scopeRoot := t.TempDir()
 	writeStorePassword(t, scopeRoot, "store-secret")
@@ -196,10 +218,15 @@ func TestResolveFromEnvPrefersStoreLocalPasswordOverProjectedPassword(t *testing
 
 func writeStorePassword(t *testing.T, scopeRoot, password string) {
 	t.Helper()
+	writeStoreAuth(t, scopeRoot, "BEADS_DOLT_PASSWORD="+password+"\n")
+}
+
+func writeStoreAuth(t *testing.T, scopeRoot, contents string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Join(scopeRoot, ".beads"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.beads): %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(scopeRoot, ".beads", ".env"), []byte("BEADS_DOLT_PASSWORD="+password+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(scopeRoot, ".beads", ".env"), []byte(contents), 0o600); err != nil {
 		t.Fatalf("WriteFile(.env): %v", err)
 	}
 }
