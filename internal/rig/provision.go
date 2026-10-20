@@ -126,9 +126,7 @@ func Provision(deps Deps, req ProvisionRequest) (config.Rig, ProvisionResult, er
 	if err != nil {
 		return config.Rig{}, result, removePartialBeadsStore(fs, rigPath, beadsStorePreexisting, err)
 	}
-	if persistedStore && !plan.reAdd && len(plan.nextCfg.Rigs) > 0 {
-		plan.nextCfg.Rigs[len(plan.nextCfg.Rigs)-1].StoreOwner = "bd"
-	}
+	persistAdoptedStoreOwner(&plan, persistedStore)
 	result.Deferred = deferred
 
 	// Step 14: snapshot the topology before the first config write.
@@ -188,6 +186,7 @@ type rigMutationPlan struct {
 	prefix                string
 	reAdd                 bool
 	reAddNeedsConfigWrite bool
+	existingRigIdx        int
 	existingRig           *config.Rig
 	explicitRigImports    []config.BoundImport
 	defaultRigImports     []config.BoundImport
@@ -248,6 +247,7 @@ func planRigMutation(deps Deps, req ProvisionRequest, rigPath, resolvedDefaultBr
 		prefix:                prefix,
 		reAdd:                 reAdd,
 		reAddNeedsConfigWrite: reAddNeedsConfigWrite,
+		existingRigIdx:        existingRigIdx,
 		existingRig:           existingRig,
 		explicitRigImports:    explicitRigImports,
 		defaultRigImports:     defaultRigImports,
@@ -629,6 +629,35 @@ func initRigBeadsStore(deps Deps, req ProvisionRequest, rigPath, prefix string, 
 		emit(ProvisionStep{Name: "beads-init", Detail: "  Initialized beads database"})
 	}
 	return deferred, false, nil
+}
+
+// persistAdoptedStoreOwner records store_owner = "bd" for an adopted rig whose
+// bead store carries persisted provider identity, so a later start does not
+// reinitialize it. A fresh add marks the rig it just appended. A re-add marks
+// the existing rig: when the config would otherwise be left unchanged (a plain
+// re-add of an already-registered path), it first copies the city and forces
+// the config write, so re-running --adopt repairs a city created before the
+// marker existed.
+func persistAdoptedStoreOwner(plan *rigMutationPlan, persistedStore bool) {
+	if !persistedStore {
+		return
+	}
+	if !plan.reAdd {
+		if len(plan.nextCfg.Rigs) > 0 {
+			plan.nextCfg.Rigs[len(plan.nextCfg.Rigs)-1].StoreOwner = "bd"
+		}
+		return
+	}
+	if plan.existingRigIdx < 0 || plan.existingRigIdx >= len(plan.nextCfg.Rigs) || plan.nextCfg.Rigs[plan.existingRigIdx].StoreOwnedByBd() {
+		return
+	}
+	if !plan.reAddNeedsConfigWrite {
+		next := *plan.nextCfg
+		next.Rigs = append([]config.Rig{}, plan.nextCfg.Rigs...)
+		plan.nextCfg = &next
+		plan.reAddNeedsConfigWrite = true
+	}
+	plan.nextCfg.Rigs[plan.existingRigIdx].StoreOwner = "bd"
 }
 
 // writeRigTopology runs steps 15-16 under the caller's topology snapshot: it

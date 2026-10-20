@@ -226,6 +226,9 @@ type RigPatch struct {
 	// beads routed into this rig. Set to "" to clear the rig's default and go
 	// back to leaving merge_strategy unstamped.
 	DefaultMergeStrategy *string `toml:"default_merge_strategy,omitempty"`
+	// StoreOwner overrides who owns the rig's bead store. Mirrors
+	// Rig.StoreOwner; "bd" marks a store whose provider init is skipped.
+	StoreOwner *string `toml:"store_owner,omitempty"`
 	// Suspended is the deprecated, pre-runtime-state suspension override.
 	// Parsed for backwards compatibility; `gc doctor` surfaces it as a
 	// warning and recommends the rename to SuspendedOnStart. No behavioral
@@ -751,6 +754,9 @@ func applyRigPatch(cfg *City, patch *RigPatch) error {
 			}
 			if patch.DefaultMergeStrategy != nil {
 				r.DefaultMergeStrategy = *patch.DefaultMergeStrategy
+			}
+			if patch.StoreOwner != nil {
+				r.StoreOwner = *patch.StoreOwner
 			}
 			if patch.Suspended != nil {
 				r.Suspended = *patch.Suspended
