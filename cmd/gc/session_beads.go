@@ -151,6 +151,30 @@ func findOpenSessionBeadBySessionName(store beads.Store, sessionName string) (be
 			return bead, true, nil
 		}
 	}
+	// The listing above is served from the CachingStore's active snapshot,
+	// which lags beads written by other processes (for example a bead created
+	// by `gc session wake` outside the controller). The session-name
+	// availability check reads backing history, so on a cache miss it would
+	// see that bead and reject every create while this lookup keeps missing
+	// it — the controller would retry the create each tick and leave the
+	// existing bead stuck in start-pending until the cache caught up. Read the
+	// exact session_name live so the existing owner is adopted instead; the
+	// live read also absorbs the row into the cache for later ticks.
+	live, err := store.List(beads.ListQuery{
+		Metadata: map[string]string{"session_name": sessionName},
+		Live:     true,
+	})
+	if err != nil {
+		return beads.Bead{}, false, err
+	}
+	for _, bead := range live {
+		if bead.Status == "closed" || !session.IsSessionBeadOrRepairable(bead) {
+			continue
+		}
+		if strings.TrimSpace(bead.Metadata["session_name"]) == sessionName {
+			return bead, true, nil
+		}
+	}
 	return beads.Bead{}, false, nil
 }
 
@@ -2129,8 +2153,22 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 					createdSessionName = sn
 				}
 			}
+			var adopted beads.Bead
 			if managedAlias != "" {
 				lockFn := func() error {
+					// The lookup above ran outside the identifier locks, so an
+					// out-of-controller create (gc session wake / nudge) that
+					// holds the same locks may have committed in between. Look
+					// again under the locks and adopt instead of colliding.
+					if isConfiguredNamed {
+						if liveBead, ok, err := findOpenSessionBeadBySessionName(store, sn); err != nil {
+							fmt.Fprintf(stderr, "session beads: refreshing open bead for %s under lock: %v\n", sn, err) //nolint:errcheck
+						} else if ok {
+							adopted = liveBead
+							blocked = true
+							return nil
+						}
+					}
 					if err := session.EnsureAliasAvailableWithConfigForOwner(store, cfg, managedAlias, "", managedAlias); err != nil {
 						fmt.Fprintf(stderr, "session beads: alias %q for %s unavailable: %v\n", managedAlias, agentName, err) //nolint:errcheck
 						if isConfiguredNamed {
@@ -2174,6 +2212,14 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 				}
 			}
 			switch {
+			case adopted.ID != "":
+				// Index the adopted owner for this tick; the live read already
+				// absorbed it into the cache, so the next tick takes the
+				// regular existing-bead path.
+				desiredNames[sn] = true
+				openIndex[sn] = adopted.ID
+				bySessionName[sn] = adopted
+				openBeads = upsertOpenSessionBead(openBeads, indexBySessionName, adopted)
 			case createErr != nil:
 				fmt.Fprintf(stderr, "session beads: creating bead for %s: %v\n", agentName, createErr) //nolint:errcheck
 			case finalizeErr != nil:
