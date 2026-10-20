@@ -30,6 +30,7 @@ go_library(
 go_test(
     name = "rig_test",
     srcs = [
+        "adopt_test.go",
         "clone_seam_test.go",
         "imports_test.go",
         "include_spec_test.go",
