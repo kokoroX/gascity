@@ -3,6 +3,8 @@
 # gc bd close/update/purge/prune/delete) plus count thresholds. No LLM judgment
 # needed — runs inline in the controller. The timeout covers one bd fork per
 # selection and per verb batch across the city and every rig scope.
+# GC_REAPER_PATROL_MAX_AGE (default 24h) is how long a patrol wisp whose
+# holder session is gone must sit untouched before the reaper closes it.
 [order]
 description = "Reap stale wisps and purge closed molecules"
 exec = "$PACK_DIR/assets/scripts/reaper.sh"

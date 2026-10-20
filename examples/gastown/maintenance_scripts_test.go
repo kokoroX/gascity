@@ -3703,6 +3703,91 @@ exit 0
 	}
 }
 
+func TestReaperClosesOrphanPatrolWispsOnlyWhenHolderSessionIsGone(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		row         string
+		sessions    string
+		listFails   bool
+		wantClose   bool
+		wantAnomaly bool
+	}{
+		{name: "orphan dry run", row: "patrol-1,gone-session", sessions: `{"schema_version":"1","sessions":[],"summary":{"total":0,"active":0,"suspended":0,"closed":0}}`},
+		{name: "orphan closes", row: "patrol-1,gone-session", sessions: `{"schema_version":"1","sessions":[],"summary":{"total":0,"active":0,"suspended":0,"closed":0}}`, wantClose: true},
+		{name: "live holder", row: "patrol-1,live-session", sessions: `{"schema_version":"1","sessions":[{"session_name":"live-session","closed":false}],"summary":{"total":1,"active":1,"suspended":0,"closed":0}}`},
+		{name: "missing holder name", row: "patrol-1,", sessions: `{"schema_version":"1","sessions":[],"summary":{"total":0,"active":0,"suspended":0,"closed":0}}`},
+		{name: "not eligible", sessions: `{"schema_version":"1","sessions":[],"summary":{"total":0,"active":0,"suspended":0,"closed":0}}`},
+		{name: "list malformed", row: "patrol-1,gone-session", sessions: `not-json`, wantAnomaly: true},
+		{name: "session list failure", row: "patrol-1,gone-session", listFails: true, wantAnomaly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cityDir, binDir := t.TempDir(), t.TempDir()
+			doltLog := filepath.Join(t.TempDir(), "dolt.log")
+			gcLog := filepath.Join(t.TempDir(), "gc.log")
+			writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
+printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+case "$*" in
+  *"SHOW DATABASES"*) printf 'Database\nbeads\n' ;;
+  *"SHOW TABLES FROM"*"LIKE 'wisps'"*) printf 'Tables_in_db\nwisps\n' ;;
+  *"w.title LIKE 'mol-%-patrol'"*)
+    printf 'id,session_name\n'
+    if [ -n "$PATROL_ROW" ]; then printf '%s\n' "$PATROL_ROW"; fi
+    ;;
+  *"SELECT DISTINCT w.id"*) printf 'id,owner_id,depth,state,mode\n' ;;
+  *"COUNT("*) printf 'COUNT(*)\n0\n' ;;
+  *"SELECT id"*) printf 'id\n' ;;
+esac
+exit 0
+`)
+			writeMaintenanceGCStub(t, filepath.Join(binDir, "gc"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GC_CALL_LOG"
+case "$*" in
+  "rig list --json") printf '{"rigs":[]}\n' ;;
+  "session list --json")
+    if [ "$PATROL_LIST_FAIL" = 1 ]; then exit 1; fi
+    printf '%s\n' "$PATROL_SESSIONS"
+    ;;
+esac
+exit 0
+`)
+			env := map[string]string{
+				"DOLT_ARGS_LOG": doltLog, "GC_CALL_LOG": gcLog,
+				"GC_CITY": cityDir, "GC_CITY_PATH": cityDir,
+				"GC_DOLT_HOST": "127.0.0.1", "GC_DOLT_PORT": "3307",
+				"GC_DOLT_USER": "root", "GC_DOLT_PASSWORD": "",
+				"PATROL_ROW": tc.row, "PATROL_SESSIONS": tc.sessions,
+				"PATROL_LIST_FAIL": map[bool]string{true: "1", false: "0"}[tc.listFails],
+				"PATH": binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			}
+			if tc.name == "orphan dry run" {
+				env["GC_REAPER_DRY_RUN"] = "1"
+			}
+			out, err := runScriptResult(t, coreScriptPath("reaper.sh"), env)
+			if err != nil {
+				t.Fatalf("reaper failed: %v\n%s", err, out)
+			}
+			logData, err := os.ReadFile(gcLog)
+			if err != nil {
+				t.Fatalf("ReadFile(gc log): %v", err)
+			}
+			log := string(logData)
+			closed := strings.Contains(log, "close patrol-1 --reason reaper: orphan patrol wisp")
+			if tc.wantClose && !closed {
+				t.Fatalf("orphan patrol wisp was not closed through gc bd close:\n%s", log)
+			}
+			if !tc.wantClose && closed {
+				t.Fatalf("patrol wisp closed unexpectedly:\n%s", log)
+			}
+			if tc.name == "orphan dry run" && !strings.Contains(log, "would_close_patrol_wisps:1") {
+				t.Fatalf("dry-run summary omitted patrol preview:\n%s", log)
+			}
+			if tc.wantAnomaly && !strings.Contains(log, "orphan patrol wisp check skipped") {
+				t.Fatalf("session list failure did not record an anomaly:\n%s", log)
+			}
+		})
+	}
+}
+
 func TestReaperDryRunReportsWouldCloseStaleWisps(t *testing.T) {
 	cityDir := t.TempDir()
 	binDir := t.TempDir()
@@ -6314,6 +6399,7 @@ func TestReaperOrderAndScriptDefaults(t *testing.T) {
 		want    string
 	}{
 		{envName: "GC_REAPER_MAX_AGE", want: "24h"},
+		{envName: "GC_REAPER_PATROL_MAX_AGE", want: "24h"},
 		{envName: "GC_REAPER_PURGE_AGE", want: "168h"},
 		{envName: "GC_REAPER_STALE_ISSUE_AGE", want: "720h"},
 	} {
