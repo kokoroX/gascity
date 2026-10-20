@@ -26,6 +26,7 @@ func newStopCmd(stdout, stderr io.Writer) *cobra.Command {
 	var wallClockTimeout time.Duration
 	var force bool
 	var jsonOut bool
+	var keepPatrolWisps bool
 	cmd := &cobra.Command{
 		Use:   "stop [path|name]",
 		Short: "Stop all agent sessions in the city",
@@ -53,11 +54,13 @@ Use --timeout=DURATION to cap the wall-clock time gc stop will spend
 before giving up; the default budgets configured session interrupt and
 stop waves, the configured shutdown grace wait, and a second orphan
 cleanup pass. Use --force to skip the interrupt grace period and go
-straight to kill.`,
+straight to kill. Use --keep-patrol-wisps to leave open patrol wisps for
+inspection; otherwise gc stop closes them so their roles can pour fresh ones
+on the next start.`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeCityNames,
 		RunE: func(_ *cobra.Command, args []string) error {
-			if cmdStopJSON(args, stdout, stderr, wallClockTimeout, force, jsonOut) != 0 {
+			if cmdStopJSON(args, stdout, stderr, wallClockTimeout, force, jsonOut, keepPatrolWisps) != 0 {
 				return errExit
 			}
 			return nil
@@ -66,6 +69,7 @@ straight to kill.`,
 	cmd.Flags().DurationVar(&wallClockTimeout, "timeout", 0, "wall-clock cap for the stop sequence (0 = derive from city config)")
 	cmd.Flags().BoolVar(&force, "force", false, "skip the interrupt grace period and force-kill all sessions immediately")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSONL summary")
+	cmd.Flags().BoolVar(&keepPatrolWisps, "keep-patrol-wisps", false, "leave patrol wisps open during shutdown")
 	return cmd
 }
 
@@ -79,7 +83,7 @@ var sessionProviderForStopCity = newSessionProviderForCity
 // is used. force=true skips the interrupt grace period (gracefulStopAll
 // runs with timeout=0, going straight to kill).
 func cmdStop(args []string, stdout, stderr io.Writer, wallClockTimeout time.Duration, force bool) int {
-	return cmdStopJSON(args, stdout, stderr, wallClockTimeout, force, false)
+	return cmdStopJSON(args, stdout, stderr, wallClockTimeout, force, false, false)
 }
 
 type stopCommandOutcome struct {
@@ -88,12 +92,13 @@ type stopCommandOutcome struct {
 	unregistered bool
 }
 
-func cmdStopJSON(args []string, stdout, stderr io.Writer, wallClockTimeout time.Duration, force bool, jsonOut bool) int {
+func cmdStopJSON(args []string, stdout, stderr io.Writer, wallClockTimeout time.Duration, force bool, jsonOut bool, keepPatrolWispsOption ...bool) int {
+	keepPatrolWisps := len(keepPatrolWispsOption) > 0 && keepPatrolWispsOption[0]
 	var outcome stopCommandOutcome
 	if wallClockTimeout > 0 {
 		unregisterTx := newSupervisorUnregisterTransaction()
 		outcome = runStopWithWallClockCap(wallClockTimeout, stderr, unregisterTx, func() stopCommandOutcome {
-			return cmdStopJSONSequence(args, stdout, stderr, force, jsonOut, true, unregisterTx)
+			return cmdStopJSONSequence(args, stdout, stderr, force, jsonOut, keepPatrolWisps, true, unregisterTx)
 		})
 	} else {
 		// The uncapped path holds the same pending-unregister transaction as
@@ -103,7 +108,7 @@ func cmdStopJSON(args []string, stdout, stderr io.Writer, wallClockTimeout time.
 		// live city unregistered. This mirrors the capped arm's accept/rollback
 		// exactly; the deferred success message is part of the same contract.
 		unregisterTx := newSupervisorUnregisterTransaction()
-		outcome = cmdStopJSONSequence(args, stdout, stderr, force, jsonOut, false, unregisterTx)
+		outcome = cmdStopJSONSequence(args, stdout, stderr, force, jsonOut, keepPatrolWisps, false, unregisterTx)
 		if outcome.code == 0 {
 			unregisterTx.commit()
 		} else {
@@ -120,7 +125,7 @@ func cmdStopJSON(args []string, stdout, stderr io.Writer, wallClockTimeout time.
 	return 0
 }
 
-func cmdStopJSONSequence(args []string, stdout, stderr io.Writer, force bool, jsonOut bool, wallClockCapApplied bool, unregisterTx *supervisorUnregisterTransaction) stopCommandOutcome {
+func cmdStopJSONSequence(args []string, stdout, stderr io.Writer, force bool, jsonOut, keepPatrolWisps, wallClockCapApplied bool, unregisterTx *supervisorUnregisterTransaction) stopCommandOutcome {
 	cityPath, err := resolveStopCityPath(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc stop: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -156,6 +161,11 @@ func cmdStopJSONSequence(args []string, stdout, stderr io.Writer, force bool, js
 		// supervisor could fall through to the standalone stop while this
 		// process still holds the lock that path waits on.
 		if ownership != nil || supervisorAliveHook() != 0 {
+			if !keepPatrolWisps {
+				if cfg, err := loadCityConfig(cityPath, stderr); err == nil {
+					cleanupPatrolWispsForStop(cityPath, cfg, stderr)
+				}
+			}
 			if !stopCityManagedBeadsProviderAfterSuccessfulStop(cityPath, stderr) {
 				return stopCommandOutcome{code: 1, cityPath: cityPath}
 			}
@@ -175,7 +185,7 @@ func cmdStopJSONSequence(args []string, stdout, stderr io.Writer, force bool, js
 
 	stopLoadedCity := func(extendCap func(time.Duration)) stopCommandOutcome {
 		return stopCommandOutcome{
-			code:         cmdStopBodyWithoutSuccessExtendingCap(cityPath, cfg, force, stopStdout, stderr, extendCap),
+			code:         cmdStopBodyWithoutSuccessExtendingCapAndOptions(cityPath, cfg, force, stopStdout, stderr, extendCap, keepPatrolWisps),
 			cityPath:     cityPath,
 			unregistered: unregisteredFromSupervisor,
 		}
@@ -425,6 +435,10 @@ func cmdStopBodyWithoutSuccess(cityPath string, cfg *config.City, force bool, st
 // default wall-clock cap that extendCap grows (nil when the cap is the
 // operator's --timeout, or there is none).
 func cmdStopBodyWithoutSuccessExtendingCap(cityPath string, cfg *config.City, force bool, stdout, stderr io.Writer, extendCap func(time.Duration)) int {
+	return cmdStopBodyWithoutSuccessExtendingCapAndOptions(cityPath, cfg, force, stdout, stderr, extendCap, false)
+}
+
+func cmdStopBodyWithoutSuccessExtendingCapAndOptions(cityPath string, cfg *config.City, force bool, stdout, stderr io.Writer, extendCap func(time.Duration), keepPatrolWisps bool) int {
 	if err := refuseControllerOnWorkerSite(cityPath); err != nil {
 		fmt.Fprintf(stderr, "gc stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -441,6 +455,9 @@ func cmdStopBodyWithoutSuccessExtendingCap(cityPath string, cfg *config.City, fo
 			return 1
 		}
 		defer ownership.Close() //nolint:errcheck // releasing the flock cannot fail meaningfully
+		if !keepPatrolWisps {
+			cleanupPatrolWispsForStop(cityPath, cfg, stderr)
+		}
 		// Controller handled the shutdown — still stop the bead store, and
 		// only after waiting for the controller to be gone: a live reader
 		// restarts a provider-owned proxy the moment it is retired. The
@@ -467,6 +484,9 @@ func cmdStopBodyWithoutSuccessExtendingCap(cityPath string, cfg *config.City, fo
 	// final provider stop to retire them again. Answer from the runtime and
 	// the proxy records instead, without touching the store.
 	if stopped, sp := cityAlreadyStoppedForStop(cfg, cityPath); stopped {
+		// Patrol-wisp cleanup is deliberately skipped here: this path answers
+		// without touching the store, and a read would restart the proxy that
+		// nothing below stops again.
 		teardownServerForStop(sp, stderr, "gc stop")
 		return 0
 	}
@@ -605,6 +625,9 @@ func cmdStopBodyWithoutSuccessExtendingCap(cityPath string, cfg *config.City, fo
 	// cases instead (sweepEnumerated in CityRuntime.shutdown), leaving such a
 	// session running rather than killing it unlisted.
 	teardownServerForStop(sp, stderr, "gc stop")
+	if !keepPatrolWisps {
+		cleanupPatrolWispsForStop(cityPath, cfg, stderr)
+	}
 
 	// Stop the bead store's backing service LAST, and only here. The order
 	// this function runs in is load-bearing for a provider-owned proxied city:
