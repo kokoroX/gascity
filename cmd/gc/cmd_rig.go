@@ -960,6 +960,7 @@ func rigBeadsStatus(fs fsys.FS, dir string) string {
 
 func newRigSuspendCmd(stdout, stderr io.Writer) *cobra.Command {
 	var jsonOutput bool
+	var keepPatrolWisps bool
 	cmd := &cobra.Command{
 		Use:   "suspend [name]",
 		Short: "Suspend a rig (reconciler will skip its agents)",
@@ -971,7 +972,9 @@ the reconciler skips them and gc hook returns empty. The rig's beads
 database remains accessible. Use "gc rig resume" to restore.
 
 Suspension state is stored in the runtime directory, not city.toml,
-so it is local to this machine and does not need to be committed.`,
+so it is local to this machine and does not need to be committed. Use
+--keep-patrol-wisps to leave open patrol wisps for inspection; otherwise they
+are closed and the role pours a fresh one on its next start.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if jsonOutput {
@@ -981,7 +984,7 @@ so it is local to this machine and does not need to be committed.`,
 				} else if ctx, err := resolveContext(); err == nil {
 					rigName = ctx.RigName
 				}
-				if cmdRigSuspend(args, io.Discard, stderr) != 0 {
+				if cmdRigSuspendWithOptions(args, io.Discard, stderr, keepPatrolWisps) != 0 {
 					return errExit
 				}
 				return writeManagementActionJSON(stdout, managementActionResult{
@@ -992,7 +995,7 @@ so it is local to this machine and does not need to be committed.`,
 					Suspended: managementBoolPtr(true),
 				})
 			}
-			if cmdRigSuspend(args, stdout, stderr) != 0 {
+			if cmdRigSuspendWithOptions(args, stdout, stderr, keepPatrolWisps) != 0 {
 				return errExit
 			}
 			return nil
@@ -1000,11 +1003,16 @@ so it is local to this machine and does not need to be committed.`,
 		ValidArgsFunction: completeRigNames,
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSONL format")
+	cmd.Flags().BoolVar(&keepPatrolWisps, "keep-patrol-wisps", false, "leave patrol wisps open when suspending the rig")
 	return cmd
 }
 
 // cmdRigSuspend is the CLI entry point for suspending a rig.
 func cmdRigSuspend(args []string, stdout, stderr io.Writer) int {
+	return cmdRigSuspendWithOptions(args, stdout, stderr, false)
+}
+
+func cmdRigSuspendWithOptions(args []string, stdout, stderr io.Writer, keepPatrolWisps bool) int {
 	ctx, err := resolveContext()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc rig suspend: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -1031,12 +1039,19 @@ func cmdRigSuspend(args []string, stdout, stderr io.Writer) int {
 		}
 		// Connection error — fall through to direct mutation.
 	}
-	return doRigSuspend(fsys.OSFS{}, cityPath, rigName, stdout, stderr)
+	// Known gap: the API path above (controller running) does not close patrol
+	// wisps; the controller stops the rig's agents asynchronously, so closing
+	// here would race them. Only this direct path performs the cleanup.
+	return doRigSuspendWithOptions(fsys.OSFS{}, cityPath, rigName, stdout, stderr, keepPatrolWisps)
 }
 
 // doRigSuspend records rig suspension in the runtime state file.
 // Accepts an injected FS for testability.
 func doRigSuspend(fs fsys.FS, cityPath, rigName string, stdout, stderr io.Writer) int {
+	return doRigSuspendWithOptions(fs, cityPath, rigName, stdout, stderr, false)
+}
+
+func doRigSuspendWithOptions(fs fsys.FS, cityPath, rigName string, stdout, stderr io.Writer, keepPatrolWisps bool) int {
 	tomlPath := filepath.Join(cityPath, "city.toml")
 	cfg, err := loadCityConfigForEditFS(fs, tomlPath)
 	if err != nil {
@@ -1067,7 +1082,11 @@ func doRigSuspend(fs fsys.FS, cityPath, rigName string, stdout, stderr io.Writer
 	}
 	for _, r := range cfg.Rigs {
 		if r.Name == rigName {
-			retireSuspendedScopesWithoutController(cityPath, []string{resolveStoreScopeRoot(cityPath, r.Path)}, false, stderr)
+			scopeRoot := resolveStoreScopeRoot(cityPath, r.Path)
+			if !keepPatrolWisps {
+				cleanupPatrolWispsInScope(cityPath, scopeRoot, patrolAssigneesForRig(cfg, r), stderr, "gc rig suspend")
+			}
+			retireSuspendedScopesWithoutController(cityPath, []string{scopeRoot}, false, stderr)
 		}
 	}
 
