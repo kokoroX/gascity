@@ -551,14 +551,10 @@ func bdOwnedDirectRigTarget(rigPath string) (contract.DoltConnectionTarget, erro
 	if !bound {
 		return contract.DoltConnectionTarget{}, fmt.Errorf("missing bd-owned rig server binding in %s", scopeMetadataJSONPath(rigPath))
 	}
+	// The persisted binding in metadata.json is the source of truth. The
+	// .beads/dolt-server.port file is runtime state and may be a stale mirror
+	// left by an earlier managed projection, so it must not override it.
 	port := strings.TrimSpace(binding.DoltPort)
-	if portData, readErr := os.ReadFile(filepath.Join(rigPath, ".beads", "dolt-server.port")); readErr == nil {
-		if value := strings.TrimSpace(string(portData)); value != "" {
-			port = value
-		}
-	} else if !os.IsNotExist(readErr) {
-		return contract.DoltConnectionTarget{}, fmt.Errorf("read bd-owned rig Dolt port: %w", readErr)
-	}
 	auth := doltauth.ResolveScopedFromEnv(rigPath, "", map[string]string{}, os.Getenv)
 	return contract.DoltConnectionTarget{
 		Host:           strings.TrimSpace(binding.DoltHost),

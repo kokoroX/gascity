@@ -108,6 +108,29 @@ func TestPreflightIdentity_BdOwnedDirectDefersOrProbesWithScopedAuth(t *testing.
 	t.Fatal("identity_match check missing")
 }
 
+// A bd-owned direct rig's endpoint lives in metadata.json. The
+// .beads/dolt-server.port file is runtime state that an earlier managed
+// projection can leave behind; it must not shadow the persisted binding.
+func TestBdOwnedDirectRigTarget_IgnoresStalePortFile(t *testing.T) {
+	_, rigPath := bdOwnedDirectCredsFixture(t)
+	writeScopeBeadsMetadata(t, rigPath, `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_server_host":"db.example.test","dolt_server_port":3307,"dolt_database":"JikeRental_p3a"}`)
+	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "dolt-server.port"), []byte("13307\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearBdOwnedDirectCredsEnv(t)
+
+	target, err := bdOwnedDirectRigTarget(rigPath)
+	if err != nil {
+		t.Fatalf("bdOwnedDirectRigTarget: %v", err)
+	}
+	if target.Port != "3307" {
+		t.Fatalf("target.Port = %q, want metadata binding port 3307", target.Port)
+	}
+	if target.Host != "db.example.test" {
+		t.Fatalf("target.Host = %q, want db.example.test", target.Host)
+	}
+}
+
 func bdOwnedDirectCredsFixture(t *testing.T) (string, string) {
 	t.Helper()
 	cityPath := t.TempDir()
