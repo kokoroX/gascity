@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/builtinpacks"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -304,6 +305,26 @@ func resolveRigAddPath(cityPath, rigArg string) (string, error) {
 	return filepath.Clean(filepath.Join(cityPath, rigArg)), nil
 }
 
+// adoptExistingRigStore installs hooks for an adopted store that already has a persisted identity (dolt_database or project_id) and reports whether it did.
+func adoptExistingRigStore(cityPath, rigPath string) (bool, error) {
+	metadata, ok, err := contract.LoadMetadataState(fsys.OSFS{}, scopeMetadataJSONPath(rigPath))
+	if err != nil {
+		return false, fmt.Errorf("load beads metadata at %s: %w", rigPath, err)
+	}
+	projectID, err := readManagedMetadataProjectID(scopeMetadataJSONPath(rigPath))
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read beads project identity at %s: %w", rigPath, err)
+	}
+	persisted := ok && strings.TrimSpace(metadata.DoltDatabase) != "" || strings.TrimSpace(projectID) != ""
+	if !persisted {
+		return false, nil
+	}
+	if err := installBeadHooks(rigPath, cityPath); err != nil {
+		return false, fmt.Errorf("install hooks at %s: %w", rigPath, err)
+	}
+	return true, nil
+}
+
 // doRigAdd is the pure logic for "gc rig add". Operations are ordered so that
 // city.toml is written last — if any earlier step fails, config is unchanged.
 // This prevents partial-state bugs where city.toml lists a rig but the rig's
@@ -342,12 +363,13 @@ func doRigAddWithResult(fs fsys.FS, cityPath, rigPath string, includes []string,
 	}
 
 	deps := rig.Deps{
-		FS:           fs,
-		CityPath:     cityPath,
-		Cfg:          cfg,
-		InitStore:    initDirIfReady,
-		InitAndHook:  initAndHookDir,
-		ComposePacks: ensureBundledRigImportsInstalled,
+		FS:                 fs,
+		CityPath:           cityPath,
+		Cfg:                cfg,
+		InitStore:          initDirIfReady,
+		AdoptExistingStore: adoptExistingRigStore,
+		InitAndHook:        initAndHookDir,
+		ComposePacks:       ensureBundledRigImportsInstalled,
 		WriteRoutes: func(cp string, c *config.City) error {
 			return writeAllRigRoutes(collectRigRoutes(cp, c))
 		},

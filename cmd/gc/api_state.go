@@ -3038,12 +3038,13 @@ func (cs *controllerState) provisionRigWrite(r config.Rig, depOnStep func(rig.Pr
 // unchanged.
 func (cs *controllerState) rigProvisionDeps(editCfg *config.City, r config.Rig, depOnStep func(rig.ProvisionStep)) rig.Deps {
 	return rig.Deps{
-		FS:           fsys.OSFS{},
-		CityPath:     cs.cityPath,
-		Cfg:          editCfg,
-		InitStore:    controllerStateInitRigDirIfReady,
-		InitAndHook:  initAndHookDir,
-		ComposePacks: ensureBundledRigImportsInstalled,
+		FS:                 fsys.OSFS{},
+		CityPath:           cs.cityPath,
+		Cfg:                editCfg,
+		InitStore:          controllerStateInitRigDirIfReady,
+		AdoptExistingStore: adoptExistingRigStore,
+		InitAndHook:        initAndHookDir,
+		ComposePacks:       ensureBundledRigImportsInstalled,
 		WriteRoutes: func(cp string, c *config.City) error {
 			return writeAllRigRoutes(collectRigRoutes(cp, c))
 		},

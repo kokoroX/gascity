@@ -609,6 +609,27 @@ func TestApplyRigPatchFormulaVars(t *testing.T) {
 	})
 }
 
+func TestApplyRigPatch_SetsStoreOwner(t *testing.T) {
+	cfg := &City{Rigs: []Rig{{Name: "adopted", Path: "/repos/adopted"}}}
+	owner := "bd"
+	if err := applyRigPatch(cfg, &RigPatch{Name: "adopted", StoreOwner: &owner}); err != nil {
+		t.Fatalf("applyRigPatch: %v", err)
+	}
+	if !cfg.Rigs[0].StoreOwnedByBd() {
+		t.Errorf("StoreOwner = %q, want %q", cfg.Rigs[0].StoreOwner, "bd")
+	}
+}
+
+func TestApplyRigPatch_LeavesStoreOwnerWhenUnset(t *testing.T) {
+	cfg := &City{Rigs: []Rig{{Name: "adopted", Path: "/repos/adopted", StoreOwner: "bd"}}}
+	if err := applyRigPatch(cfg, &RigPatch{Name: "adopted", Prefix: ptrStr("ad")}); err != nil {
+		t.Fatalf("applyRigPatch: %v", err)
+	}
+	if got := cfg.Rigs[0].StoreOwner; got != "bd" {
+		t.Errorf("StoreOwner = %q, want the pre-patch %q", got, "bd")
+	}
+}
+
 func TestApplyPatches_RigNotFound(t *testing.T) {
 	cfg := &City{
 		Rigs: []Rig{{Name: "hw", Path: "/path"}},
