@@ -62,6 +62,7 @@ maintenance_done() {
 
 # Configurable thresholds.
 MAX_AGE="${GC_REAPER_MAX_AGE:-24h}"
+PATROL_MAX_AGE="${GC_REAPER_PATROL_MAX_AGE:-24h}"
 PURGE_AGE="${GC_REAPER_PURGE_AGE:-168h}"
 STALE_ISSUE_AGE="${GC_REAPER_STALE_ISSUE_AGE:-720h}"
 SESSION_PURGE_AGE="${GC_REAPER_SESSION_PURGE_AGE:-720h}"
@@ -101,6 +102,9 @@ if ! [[ "$WORKFLOW_ROOT_CENSUS_START" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then
     WORKFLOW_ROOT_CENSUS_START=""
 fi
 STALE_WISP_CLOSE_REASON="stale wisp whose owning parent or root is closed, auto-closed by reaper"
+ORPHAN_PATROL_WISP_CLOSE_REASON="reaper: orphan patrol wisp (holder session gone)"
+PATROL_SESSION_NAMES=""
+PATROL_SESSION_LIST_STATE="unread"
 # Step 3 purges the whole wisps plane (including --no-history rows, which is
 # where gc keeps order-tracking beads) and relies on gc bd purge to keep a closed
 # wisp that an open, hooked or in-progress wisp still depends on through
@@ -135,12 +139,15 @@ duration_to_hours() {
 }
 
 MAX_AGE_H=$(duration_to_hours "$MAX_AGE")
+PATROL_MAX_AGE_H=$(duration_to_hours "$PATROL_MAX_AGE")
 STALE_AGE_H=$(duration_to_hours "$STALE_ISSUE_AGE")
 
 TOTAL_SCOPES=0
 TOTAL_STALE_WISPS=0
 TOTAL_CLOSED_WISPS=0
 TOTAL_WOULD_CLOSE_WISPS=0
+TOTAL_WOULD_CLOSE_PATROL_WISPS=0
+TOTAL_CLOSED_PATROL_WISPS=0
 TOTAL_HELD_WISPS=0
 TOTAL_WOULD_EXPIRE=0
 TOTAL_PURGED=0
@@ -880,6 +887,73 @@ reap_scope() {
 
     run_budget_exhausted && return 0
 
+    # Step 1b: close stale patrol wisps whose holder session is gone. A single
+    # session snapshot is shared by all scopes in this reaper run; if it cannot
+    # be read, preserve every candidate and record the uncertainty.
+    if ! run_budget_exhausted; then
+        if get_sql_rows "orphan patrol wisp" "
+            SELECT w.id, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(w.metadata, '$.\"gc.session_name\"')), '')
+            FROM \`$DB\`.wisps w
+            WHERE w.status IN ('open', 'in_progress')
+            AND w.issue_type = 'molecule'
+            AND w.title LIKE 'mol-%-patrol'
+            AND (JSON_EXTRACT(w.metadata, '$.\"gc.kind\"') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(w.metadata, '$.\"gc.kind\"')) = '')
+            AND COALESCE(w.updated_at, w.created_at) < DATE_SUB(UTC_TIMESTAMP(), INTERVAL $PATROL_MAX_AGE_H HOUR)
+            AND NOT EXISTS (
+                SELECT 1 FROM \`$DB\`.wisp_dependencies d
+                WHERE d.issue_id = w.id
+                AND $WISP_CLOSE_EDGE_PREDICATE
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM \`$DB\`.dependencies d
+                WHERE d.issue_id = w.id
+                AND d.type = 'parent-child'
+            )
+        "; then
+            rows=$SQL_ROWS_RESULT
+            if [ -n "$rows" ]; then
+                if [ "$PATROL_SESSION_LIST_STATE" = "unread" ]; then
+                    if PATROL_SESSION_LIST_JSON=$(cd "$CITY_ABS" && gc session list --json 2>/dev/null) &&
+                        printf '%s' "$PATROL_SESSION_LIST_JSON" | jq -e 'type == "object" and (.sessions | type == "array")' >/dev/null 2>&1; then
+                        PATROL_SESSION_NAMES=$(printf '%s' "$PATROL_SESSION_LIST_JSON" | jq -r '.sessions[] | select((.closed // false) == false) | .session_name // empty' 2>/dev/null)
+                        PATROL_SESSION_LIST_STATE="ready"
+                    else
+                        PATROL_SESSION_LIST_STATE="failed"
+                        record_anomaly "$SCOPE_LABEL" "orphan patrol wisp check skipped: gc session list --json failed or returned invalid JSON"
+                    fi
+                fi
+                if [ "$PATROL_SESSION_LIST_STATE" = "ready" ]; then
+                    ids=""
+                    while IFS=, read -r patrol_id patrol_session; do
+                        case "$patrol_id" in ''|*[!A-Za-z0-9._-]*)
+                            scope_anomaly "orphan patrol wisp query returned unreadable row: $(sanitize_output "$rows")"
+                            ids=""
+                            break
+                            ;;
+                        esac
+                        [ -n "$patrol_session" ] || continue
+                        if ! printf '%s\n' "$PATROL_SESSION_NAMES" | grep -qxF -- "$patrol_session"; then
+                            ids="${ids}${ids:+$'\n'}$patrol_id"
+                        fi
+                    done <<< "$rows"
+                    count=$(count_lines "$ids")
+                    if [ "$count" -gt 0 ]; then
+                        if [ -n "$DRY_RUN" ]; then
+                            TOTAL_WOULD_CLOSE_PATROL_WISPS=$((TOTAL_WOULD_CLOSE_PATROL_WISPS + count))
+                        else
+                            run_budget_exhausted || {
+                                close_ids "closing orphan patrol wisps" "$ids" "$ORPHAN_PATROL_WISP_CLOSE_REASON"
+                                TOTAL_CLOSED_PATROL_WISPS=$((TOTAL_CLOSED_PATROL_WISPS + CLOSE_IDS_OK))
+                            }
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    run_budget_exhausted && return 0
+
     # Step 2: close stale inactive workflow roots. This is the finalize-crash
     # safety net: it only reaps old, unassigned topology roots whose stamped
     # and parent-child subtree has no live descendants. Roots stamped with
@@ -1436,9 +1510,9 @@ else
     "$ESCALATE_SCRIPT" --resolve-incident "reaper:anomalies" >/dev/null || true
 fi
 
-SUMMARY="reaper — scopes:$TOTAL_SCOPES, stale_wisps:$TOTAL_STALE_WISPS, closed_wisps:$TOTAL_CLOSED_WISPS, held_wisps:$TOTAL_HELD_WISPS, workflow_roots:$TOTAL_WORKFLOW_ROOTS_CLOSED, workflow_root_census:$TOTAL_WORKFLOW_ROOTS_CHECKED/$TOTAL_WORKFLOW_ROOT_CANDIDATES, skipped_cross_store_workflow_roots:$TOTAL_WORKFLOW_ROOTS_STORE_REF_SKIPPED, skipped_non_city_workflow_issue_roots:$TOTAL_WORKFLOW_ISSUE_ROOTS_SKIPPED, purged:$TOTAL_PURGED, sessions-pruned:$TOTAL_SESSIONS_PRUNED, closed:$TOTAL_ISSUES_CLOSED, expired:$TOTAL_EXPIRED_ISSUES_CLOSED, expired_skipped:$TOTAL_EXPIRED_ISSUES_SKIPPED, skipped_non_city_issues:$TOTAL_STALE_ISSUES_SKIPPED, mail_wisps:$TOTAL_MAIL_WISPS"
+SUMMARY="reaper — scopes:$TOTAL_SCOPES, stale_wisps:$TOTAL_STALE_WISPS, closed_wisps:$TOTAL_CLOSED_WISPS, closed_patrol_wisps:$TOTAL_CLOSED_PATROL_WISPS, held_wisps:$TOTAL_HELD_WISPS, workflow_roots:$TOTAL_WORKFLOW_ROOTS_CLOSED, workflow_root_census:$TOTAL_WORKFLOW_ROOTS_CHECKED/$TOTAL_WORKFLOW_ROOT_CANDIDATES, skipped_cross_store_workflow_roots:$TOTAL_WORKFLOW_ROOTS_STORE_REF_SKIPPED, skipped_non_city_workflow_issue_roots:$TOTAL_WORKFLOW_ISSUE_ROOTS_SKIPPED, purged:$TOTAL_PURGED, sessions-pruned:$TOTAL_SESSIONS_PRUNED, closed:$TOTAL_ISSUES_CLOSED, expired:$TOTAL_EXPIRED_ISSUES_CLOSED, expired_skipped:$TOTAL_EXPIRED_ISSUES_SKIPPED, skipped_non_city_issues:$TOTAL_STALE_ISSUES_SKIPPED, mail_wisps:$TOTAL_MAIL_WISPS"
 if [ -n "$DRY_RUN" ]; then
-    SUMMARY="$SUMMARY, would_close_wisps:$TOTAL_WOULD_CLOSE_WISPS, would_close_workflow_roots:$TOTAL_WOULD_CLOSE_WORKFLOW_ROOTS, would_purge:$TOTAL_WOULD_PURGE, would_expire:$TOTAL_WOULD_EXPIRE (dry run)"
+    SUMMARY="$SUMMARY, would_close_wisps:$TOTAL_WOULD_CLOSE_WISPS, would_close_patrol_wisps:$TOTAL_WOULD_CLOSE_PATROL_WISPS, would_close_workflow_roots:$TOTAL_WOULD_CLOSE_WORKFLOW_ROOTS, would_purge:$TOTAL_WOULD_PURGE, would_expire:$TOTAL_WOULD_EXPIRE (dry run)"
 fi
 
 maintenance_done "$SUMMARY"
