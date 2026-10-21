@@ -33,6 +33,7 @@ formula_compiler = ">=2.0.0"
 
 [[steps]]
 id = "workspace-setup"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Set up worktree on base branch"
 needs = ["load-context"]
 description = """
@@ -94,6 +95,7 @@ worktree recorded on the bead."""
 
 [[steps]]
 id = "commit-and-push"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Commit to base branch, push, and exit"
 needs = ["self-review"]
 description = """

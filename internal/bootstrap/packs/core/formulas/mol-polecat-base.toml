@@ -68,6 +68,7 @@ default = ""
 
 [[steps]]
 id = "load-context"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Load context and verify assignment"
 description = """
 Initialize your session and understand your assignment.
@@ -129,6 +130,7 @@ Question: <what you need clarified>"
 
 [[steps]]
 id = "workspace-setup"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Set up workspace (override in variant formulas)"
 needs = ["load-context"]
 description = """
@@ -139,6 +141,7 @@ for their merge strategy (feature branch, direct commit, etc)."""
 
 [[steps]]
 id = "preflight-tests"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Verify pre-flights pass on base branch"
 needs = ["workspace-setup"]
 description = """
@@ -292,6 +295,7 @@ instead."""
 
 [[steps]]
 id = "implement"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Implement the solution"
 needs = ["preflight-tests"]
 description = """
@@ -374,6 +378,7 @@ resumes from context (re-reads formula steps, checks git/bead state).
 
 [[steps]]
 id = "self-review"
+metadata = { "gc.continuation_group" = "polecat-work" }
 title = "Self-review and run tests"
 needs = ["implement"]
 description = """
