@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -304,6 +305,9 @@ func collectStepConditionVarRefs(condition string, refs map[string]bool) {
 	}
 }
 
+// WorkflowFlowLabel lets bd --exclude-label filter materialized workflow cards.
+const WorkflowFlowLabel = "gc:flow"
+
 func toRecipeWithGraph(f *Formula, graphWorkflow bool) (*Recipe, error) {
 	r := &Recipe{
 		Name:          f.Formula,
@@ -389,7 +393,19 @@ func toRecipeWithGraph(f *Formula, graphWorkflow bool) (*Recipe, error) {
 		}
 	}
 
+	if graphWorkflow && !r.RootOnly {
+		addWorkflowFlowLabel(r)
+	}
+
 	return r, nil
+}
+
+func addWorkflowFlowLabel(recipe *Recipe) {
+	for i := range recipe.Steps {
+		if !slices.Contains(recipe.Steps[i].Labels, WorkflowFlowLabel) {
+			recipe.Steps[i].Labels = append(recipe.Steps[i].Labels, WorkflowFlowLabel)
+		}
+	}
 }
 
 func orderGraphRecipeSteps(rootID string, steps []RecipeStep, deps []RecipeDep) ([]RecipeStep, error) {
