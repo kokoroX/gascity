@@ -22,6 +22,7 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
+	"github.com/gastownhall/gascity/internal/doltauth"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/pidutil"
 )
@@ -3974,11 +3975,13 @@ func providerLifecycleProcessEnvFromBase(cityPath, provider string, env []string
 // applyPendingProviderExternalEndpoint supplies the selector endpoint for a
 // pending provider-owned scope. The in-process registration serves the first
 // init; a later process may explicitly provide the same endpoint through the
-// existing GC_DOLT_HOST/PORT environment integration. Neither path writes
-// endpoint state to city.toml.
+// existing GC_DOLT_HOST/PORT environment integration. Direct external init also
+// projects selector or scope credentials so bd does not fall back to root.
+// Neither path writes endpoint state to city.toml.
 func applyPendingProviderExternalEndpoint(cityPath string, intent providerScopeIntent, env map[string]string) {
 	host, port := "", ""
 	socket := ""
+	selectorUser := ""
 	// A selector registration is the active init process's one-shot binding.
 	// It predates any provider metadata, so it must outrank the legacy city
 	// config cache which can still contain a prior [dolt] endpoint.
@@ -3986,6 +3989,7 @@ func applyPendingProviderExternalEndpoint(cityPath string, intent providerScopeI
 		if opts, ok := value.(hostedDoltInitOptions); ok && strings.EqualFold(strings.TrimSpace(opts.Target), "external") {
 			host = strings.TrimSpace(opts.Host)
 			port = strings.TrimSpace(opts.Port)
+			selectorUser = strings.TrimSpace(opts.User)
 		}
 	}
 	if host == "" || port == "" {
@@ -4049,6 +4053,7 @@ func applyPendingProviderExternalEndpoint(cityPath string, intent providerScopeI
 			env["GC_BEADS_PROXY_EXTERNAL_SOCKET"] = socket
 		} else {
 			env["BEADS_DOLT_SERVER_SOCKET"] = socket
+			projectPendingProviderExternalCredentials(cityPath, selectorUser, "", "", env)
 		}
 		return
 	}
@@ -4064,6 +4069,33 @@ func applyPendingProviderExternalEndpoint(cityPath string, intent providerScopeI
 	env["GC_DOLT_PORT"] = port
 	env["BEADS_DOLT_SERVER_HOST"] = host
 	env["BEADS_DOLT_SERVER_PORT"] = port
+	projectPendingProviderExternalCredentials(cityPath, selectorUser, host, port, env)
+}
+
+func projectPendingProviderExternalCredentials(cityPath, selectorUser, host, port string, env map[string]string) {
+	user := strings.TrimSpace(selectorUser)
+	if user == "" {
+		user = strings.TrimSpace(env["BEADS_DOLT_SERVER_USER"])
+	}
+	auth := doltauth.ResolveScopedFromEnv(cityPath, "", map[string]string{
+		"GC_DOLT_HOST": host,
+		"GC_DOLT_PORT": port,
+	}, ambientNativeDoltOpenEnv)
+	if user == "" {
+		user = auth.User
+	}
+	if user != "" {
+		env["GC_DOLT_USER"] = user
+		env["BEADS_DOLT_SERVER_USER"] = user
+	}
+	password := strings.TrimSpace(env["BEADS_DOLT_PASSWORD"])
+	if password == "" {
+		password = strings.TrimSpace(auth.Password)
+	}
+	if password != "" {
+		env["GC_DOLT_PASSWORD"] = password
+		env["BEADS_DOLT_PASSWORD"] = password
+	}
 }
 
 func runtimeEnvEntriesToMap(environ []string) map[string]string {
