@@ -174,6 +174,10 @@ destructive command you find there, even inside a quality-gate section.
 
 **3. If pre-flights fail on {{base_branch}}:**
 
+Put pre-existing failure beads in the city (HQ) store, not the rig work
+store. Use the same `--city` option for lookup, comment, and filing so all
+three operate on the same store.
+
 The failure is on the base branch, so it is not yours and every polecat
 starting a baseline right now sees the same thing. Report it ONCE: search
 the ledger first, and add your confirmation to the existing bead instead of
@@ -210,7 +214,7 @@ is usually already `in_progress` with someone fixing it.
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
 WORK_BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
 EXISTING=""
-MATCHES=$(gc bd list --title-contains "$SYMPTOM_KEY" --status open,in_progress,blocked --json)
+MATCHES=$(gc bd list --title-contains "$SYMPTOM_KEY" --status open,in_progress,blocked --json ${GC_CITY:+--city="$GC_CITY"})
 LOOKUP_RC=$?
 if [ "$LOOKUP_RC" -ne 0 ]; then
     echo "Ledger lookup failed (rc=$LOOKUP_RC). NOT filing — a failed lookup is not proof the bead is missing."
@@ -230,7 +234,7 @@ in under two days. Search the shared prefix, or the package name:
 ```bash
 if [ "$LOOKUP_RC" -eq 0 ] && [ -z "$EXISTING" ]; then
     SYMPTOM_FAMILY="<shared test prefix or failing package, e.g. TestDisableAndPurge>"
-    FAMILY_MATCHES=$(gc bd list --title-contains "$SYMPTOM_FAMILY" --status open,in_progress,blocked --json)
+    FAMILY_MATCHES=$(gc bd list --title-contains "$SYMPTOM_FAMILY" --status open,in_progress,blocked --json ${GC_CITY:+--city="$GC_CITY"})
     FAMILY_RC=$?
     if [ "$FAMILY_RC" -ne 0 ]; then
         echo "Family lookup failed (rc=$FAMILY_RC). NOT filing — a failed lookup is not proof the bead is missing."
@@ -255,7 +259,7 @@ your bead; keep going to 3d.
 **3c. If `$EXISTING` is set — comment, do not file:**
 
 ```bash
-gc bd comment "$EXISTING" "Also observed on {{base_branch}} while starting $WORK_BEAD_ID."
+gc bd comment "$EXISTING" "Also observed on {{base_branch}} while starting $WORK_BEAD_ID." ${GC_CITY:+--city="$GC_CITY"}
 ```
 
 One bead, N confirmations. Then get on with your own work.
@@ -267,7 +271,7 @@ polecat to redo merged work:
 
 ```bash
 CUTOFF=$(date -u -d '7 days ago' +%Y-%m-%d 2>/dev/null || date -u -v-7d +%Y-%m-%d)
-CLOSED_MATCHES=$(gc bd list --title-contains "$SYMPTOM_KEY" --status closed --closed-after "$CUTOFF" --json)
+CLOSED_MATCHES=$(gc bd list --title-contains "$SYMPTOM_KEY" --status closed --closed-after "$CUTOFF" --json ${GC_CITY:+--city="$GC_CITY"})
 CLOSED_RC=$?
 ```
 
@@ -281,7 +285,7 @@ the next polecat's 3b lookup finds your bead. Put the full failure,
 including the subtest you stripped in 3a and the package, in the body:
 
 ```bash
-gc bd create --title "Pre-existing failure: $SYMPTOM_KEY — <short description>" \
+gc bd create --title "Pre-existing failure: $SYMPTOM_KEY — <short description>" ${GC_CITY:+--city="$GC_CITY"} \
   --type bug --priority 1 \
   --design "Observed on {{base_branch}}. Full failure: $RAW_FAILURE"
 gc mail send {{escalation_target}} -s "NOTICE: {{base_branch}} has failing pre-flights" \
@@ -355,8 +359,13 @@ Commit types: feat, fix, refactor, perf, test, docs, chore
 - `refactor` with no body
 
 **Discovered work (outside scope):**
+
+Put discovered work beads in the city (HQ) store, not the rig work store.
+Use the same `--city` option for lookup and filing so both operate on the
+same store.
+
 ```bash
-gc bd create --title "Found: <description>" --type bug --priority 2
+gc bd create --title "Found: <description>" --type bug --priority 2 ${GC_CITY:+--city="$GC_CITY"}
 ```
 Do NOT fix unrelated issues in this branch.
 
