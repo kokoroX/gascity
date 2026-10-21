@@ -2776,3 +2776,64 @@ func TestSessionStepMarksAreTheSessionPackages(t *testing.T) {
 		t.Fatalf("marks %q %q %q, want session's %q %q %q", sessionStepType, sessionStepLabel, startupHealthStepType, session.BeadType, session.LabelSession, session.StartupHealthEpisodeType)
 	}
 }
+
+func TestGraphWorkflowStepsCarryFlowLabel(t *testing.T) {
+	t.Run("graph workflow labels root and steps", func(t *testing.T) {
+		recipe, err := toRecipeWithGraph(&Formula{
+			Formula: "flow",
+			Steps: []*Step{
+				{ID: "first", Title: "First", Labels: []string{"original", WorkflowFlowLabel}},
+				{ID: "second", Title: "Second", WaitsFor: "first.done", Labels: []string{"other"}},
+			},
+		}, true)
+		if err != nil {
+			t.Fatalf("toRecipeWithGraph: %v", err)
+		}
+
+		for _, step := range recipe.Steps {
+			if !slices.Contains(step.Labels, WorkflowFlowLabel) {
+				t.Errorf("%s labels = %v, want %q", step.ID, step.Labels, WorkflowFlowLabel)
+			}
+			count := 0
+			for _, label := range step.Labels {
+				if label == WorkflowFlowLabel {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Errorf("%s has %d %q labels, want exactly one", step.ID, count, WorkflowFlowLabel)
+			}
+		}
+		if got, want := recipe.StepByID("flow.first").Labels, []string{"original", WorkflowFlowLabel}; !reflect.DeepEqual(got, want) {
+			t.Errorf("first labels = %v, want %v", got, want)
+		}
+		if got, want := recipe.StepByID("flow.second").Labels, []string{"other", "gate:first.done", WorkflowFlowLabel}; !reflect.DeepEqual(got, want) {
+			t.Errorf("second labels = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("root-only workflow stays unlabelled", func(t *testing.T) {
+		recipe, err := toRecipeWithGraph(&Formula{Formula: "root-only", Phase: "vapor"}, true)
+		if err != nil {
+			t.Fatalf("toRecipeWithGraph: %v", err)
+		}
+		if slices.Contains(recipe.RootStep().Labels, WorkflowFlowLabel) {
+			t.Fatalf("root labels = %v, want no %q", recipe.RootStep().Labels, WorkflowFlowLabel)
+		}
+	})
+
+	t.Run("legacy recipe stays unlabelled", func(t *testing.T) {
+		recipe, err := toRecipeWithGraph(&Formula{
+			Formula: "legacy",
+			Steps:   []*Step{{ID: "work", Title: "Work"}},
+		}, false)
+		if err != nil {
+			t.Fatalf("toRecipeWithGraph: %v", err)
+		}
+		for _, step := range recipe.Steps {
+			if slices.Contains(step.Labels, WorkflowFlowLabel) {
+				t.Errorf("%s labels = %v, want no %q", step.ID, step.Labels, WorkflowFlowLabel)
+			}
+		}
+	})
+}
