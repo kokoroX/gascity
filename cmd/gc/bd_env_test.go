@@ -5840,6 +5840,110 @@ func TestScopeEnvBuildReadsAmbientBeadsEnvViaNativeOpenGuard(t *testing.T) {
 	})
 }
 
+func TestApplyPendingProviderExternalEndpointProjectsDirectCredentials(t *testing.T) {
+	const cityHost, cityPort = "db.example.invalid", "4406"
+	clearCredentialEnv := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("GC_DOLT_USER", "")
+		t.Setenv("GC_DOLT_PASSWORD", "")
+		t.Setenv("BEADS_DOLT_SERVER_USER", "")
+		t.Setenv("BEADS_DOLT_PASSWORD", "")
+		emptyCredentials := filepath.Join(t.TempDir(), "credentials")
+		if err := os.WriteFile(emptyCredentials, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BEADS_CREDENTIALS_FILE", emptyCredentials)
+		stubAmbientNativeDoltOpenEnv(t, map[string]string{"BEADS_CREDENTIALS_FILE": emptyCredentials})
+	}
+	registerSelector := func(t *testing.T, city string, opts hostedDoltInitOptions) {
+		t.Helper()
+		key := normalizePathForCompare(city)
+		selectorExternalInitOptions.Store(key, opts)
+		t.Cleanup(func() { selectorExternalInitOptions.Delete(key) })
+	}
+	newCity := func(t *testing.T) string {
+		t.Helper()
+		city := t.TempDir()
+		registerSelector(t, city, hostedDoltInitOptions{Target: "external", Host: cityHost, Port: cityPort})
+		return city
+	}
+
+	t.Run("selector user", func(t *testing.T) {
+		clearCredentialEnv(t)
+		city := t.TempDir()
+		registerSelector(t, city, hostedDoltInitOptions{Target: "external", Host: cityHost, Port: cityPort, User: "selector-user"})
+		env := map[string]string{}
+		applyPendingProviderExternalEndpoint(city, providerScopeIntent{Transport: "direct"}, env)
+		for _, key := range []string{"BEADS_DOLT_SERVER_USER", "GC_DOLT_USER"} {
+			if got := env[key]; got != "selector-user" {
+				t.Errorf("%s = %q, want selector-user", key, got)
+			}
+		}
+	})
+	t.Run("process credentials", func(t *testing.T) {
+		clearCredentialEnv(t)
+		city := newCity(t)
+		t.Setenv("GC_DOLT_USER", "process-user")
+		t.Setenv("GC_DOLT_PASSWORD", "process-password")
+		env := map[string]string{}
+		applyPendingProviderExternalEndpoint(city, providerScopeIntent{Transport: "direct"}, env)
+		for key, want := range map[string]string{
+			"BEADS_DOLT_SERVER_USER": "process-user", "GC_DOLT_USER": "process-user",
+			"BEADS_DOLT_PASSWORD": "process-password", "GC_DOLT_PASSWORD": "process-password",
+		} {
+			if got := env[key]; got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+	})
+	t.Run("scope file credentials", func(t *testing.T) {
+		clearCredentialEnv(t)
+		city := newCity(t)
+		beadsDir := filepath.Join(city, ".beads")
+		if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(beadsDir, ".env"), []byte("BEADS_DOLT_SERVER_USER=scope-user\nBEADS_DOLT_PASSWORD=scope-password\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := map[string]string{}
+		applyPendingProviderExternalEndpoint(city, providerScopeIntent{Transport: "direct"}, env)
+		for key, want := range map[string]string{
+			"BEADS_DOLT_SERVER_USER": "scope-user", "GC_DOLT_USER": "scope-user",
+			"BEADS_DOLT_PASSWORD": "scope-password", "GC_DOLT_PASSWORD": "scope-password",
+		} {
+			if got := env[key]; got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+	})
+	t.Run("existing Beads password", func(t *testing.T) {
+		clearCredentialEnv(t)
+		city := newCity(t)
+		env := map[string]string{"BEADS_DOLT_PASSWORD": "already-projected"}
+		applyPendingProviderExternalEndpoint(city, providerScopeIntent{Transport: "direct"}, env)
+		if got := env["BEADS_DOLT_PASSWORD"]; got != "already-projected" {
+			t.Fatalf("BEADS_DOLT_PASSWORD = %q, want existing value", got)
+		}
+		if got := env["GC_DOLT_PASSWORD"]; got != "already-projected" {
+			t.Fatalf("GC_DOLT_PASSWORD = %q, want existing Beads password", got)
+		}
+	})
+	t.Run("proxied transport", func(t *testing.T) {
+		clearCredentialEnv(t)
+		city := t.TempDir()
+		registerSelector(t, city, hostedDoltInitOptions{Target: "external", Host: cityHost, Port: cityPort, User: "selector-user"})
+		env := map[string]string{}
+		applyPendingProviderExternalEndpoint(city, providerScopeIntent{Transport: "proxied"}, env)
+		for _, key := range []string{"BEADS_DOLT_SERVER_USER", "BEADS_DOLT_PASSWORD", "GC_DOLT_USER", "GC_DOLT_PASSWORD"} {
+			if _, ok := env[key]; ok {
+				t.Errorf("%s unexpectedly projected as %q", key, env[key])
+			}
+		}
+	})
+}
+
 // TestBeadsDoltServerTLSIsPassthroughNotProjected documents the intentional
 // separation: BEADS_DOLT_SERVER_TLS is an ambient hosted-gateway credential
 // passthrough (preserved for gc-spawned bd via preserveHostedBeadsCredentialEnv),
