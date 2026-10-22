@@ -5263,6 +5263,98 @@ func TestSlingFormulaTargetBranch_PrefersBeadMetadata(t *testing.T) {
 	}
 }
 
+// seedTrackingConvoy creates a convoy with the given target that tracks each
+// item through a tracks edge, the shape `gc convoy create --target` writes.
+func seedTrackingConvoy(t *testing.T, store beads.Store, target string, items ...string) {
+	t.Helper()
+	cv, err := store.Create(beads.Bead{Type: "convoy", Metadata: map[string]string{"target": target}})
+	if err != nil {
+		t.Fatalf("seeding convoy: %v", err)
+	}
+	for _, id := range items {
+		if err := convoycore.TrackItem(store, cv.ID, id); err != nil {
+			t.Fatalf("tracking %s: %v", id, err)
+		}
+	}
+}
+
+func TestSlingFormulaTargetBranch_InheritsTrackingConvoyTarget(t *testing.T) {
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test"},
+		Rigs:      []config.Rig{{Name: "scamper", Path: "/scamper", Prefix: "SC", DefaultBranch: "main"}},
+	}
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{Title: "card without its own target"})
+	if err != nil {
+		t.Fatalf("seeding bead: %v", err)
+	}
+	seedTrackingConvoy(t, store, "integration/auth-rewrite", bead.ID)
+	deps := SlingDeps{Cfg: cfg, Store: store, Branches: fixedBranchResolver{branch: "main"}}
+
+	got := SlingFormulaTargetBranch(bead.ID, deps, config.Agent{Name: "polecat", Dir: "scamper"})
+	if got != "integration/auth-rewrite" {
+		t.Errorf("SlingFormulaTargetBranch = %q, want %q (tracking convoy target)", got, "integration/auth-rewrite")
+	}
+}
+
+func TestBeadMetadataTarget_OwnTargetBeatsTrackingConvoy(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{Metadata: map[string]string{"target": "release/v2"}})
+	if err != nil {
+		t.Fatalf("seeding bead: %v", err)
+	}
+	seedTrackingConvoy(t, store, "integration/auth-rewrite", bead.ID)
+
+	if got := BeadMetadataTarget(store, bead.ID); got != "release/v2" {
+		t.Errorf("BeadMetadataTarget = %q, want %q (own target wins)", got, "release/v2")
+	}
+}
+
+func TestBeadMetadataTarget_InheritsConvoyTrackingAnAncestor(t *testing.T) {
+	store := beads.NewMemStore()
+	parent, err := store.Create(beads.Bead{Title: "epic"})
+	if err != nil {
+		t.Fatalf("seeding parent: %v", err)
+	}
+	child, err := store.Create(beads.Bead{Title: "step", ParentID: parent.ID})
+	if err != nil {
+		t.Fatalf("seeding child: %v", err)
+	}
+	seedTrackingConvoy(t, store, "integration/epic", parent.ID)
+
+	if got := BeadMetadataTarget(store, child.ID); got != "integration/epic" {
+		t.Errorf("BeadMetadataTarget = %q, want %q (convoy tracking the parent)", got, "integration/epic")
+	}
+}
+
+func TestBeadMetadataTarget_IgnoresTrackingConvoyWithoutTarget(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{Title: "card"})
+	if err != nil {
+		t.Fatalf("seeding bead: %v", err)
+	}
+	seedTrackingConvoy(t, store, "", bead.ID)
+	seedTrackingConvoy(t, store, "integration/auth-rewrite", bead.ID)
+
+	if got := BeadMetadataTarget(store, bead.ID); got != "integration/auth-rewrite" {
+		t.Errorf("BeadMetadataTarget = %q, want %q (untargeted convoy does not mask a targeted one)", got, "integration/auth-rewrite")
+	}
+}
+
+func TestBeadMetadataTarget_ConflictingTrackingConvoysInheritNothing(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{Title: "card"})
+	if err != nil {
+		t.Fatalf("seeding bead: %v", err)
+	}
+	seedTrackingConvoy(t, store, "integration/a", bead.ID)
+	seedTrackingConvoy(t, store, "integration/b", bead.ID)
+
+	if got := BeadMetadataTarget(store, bead.ID); got != "" {
+		t.Errorf("BeadMetadataTarget = %q, want empty (two convoys disagree; the bead must name its own target)", got)
+	}
+}
+
 func TestSlingFormulaTargetBranch_UsesRigDefaultBranchByBead(t *testing.T) {
 	cfg := &config.City{
 		Workspace: config.Workspace{Name: "test"},

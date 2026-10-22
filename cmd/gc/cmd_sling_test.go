@@ -22,6 +22,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/graphroute"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -8956,6 +8957,50 @@ func TestBuildSlingFormulaVarsInjectsIssueAndBaseBranch(t *testing.T) {
 	}
 	if got, ok := findVarValue(vars, "base_branch"); !ok || got != "integration/convoy-7" {
 		t.Fatalf("base_branch var = %q, %v; want integration/convoy-7, true", got, ok)
+	}
+}
+
+// TestBuildSlingFormulaVarsInheritsOwnedConvoyTarget covers the multi-card epic
+// shape: cards tracked by `gc convoy create --owned --target` (and added later
+// with `gc convoy add`) carry no metadata.target of their own, and their
+// base_branch must be the convoy's integration branch, not the rig default.
+func TestBuildSlingFormulaVarsInheritsOwnedConvoyTarget(t *testing.T) {
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "hw", Path: newRepoWithOriginHead(t, "main")}},
+	}
+	a := config.Agent{Name: "polecat", Dir: "hw"}
+	deps, _, _ := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	store := beads.NewMemStore()
+	deps.Store = store
+	first, err := store.Create(beads.Bead{Title: "card 1"})
+	if err != nil {
+		t.Fatalf("seeding card 1: %v", err)
+	}
+	second, err := store.Create(beads.Bead{Title: "card 2"})
+	if err != nil {
+		t.Fatalf("seeding card 2: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := doConvoyCreateWithOptions(store, events.Discard, []string{"auth-rewrite", first.ID},
+		convoyCreateOptions{Fields: ConvoyFields{Target: "integration/auth-rewrite"}, Owned: true},
+		&stdout, &stderr); code != 0 {
+		t.Fatalf("convoy create = %d, stderr: %s", code, stderr.String())
+	}
+	convoys, err := store.List(beads.ListQuery{Type: "convoy"})
+	if err != nil || len(convoys) != 1 {
+		t.Fatalf("listing convoys = %v, %v; want one convoy", convoys, err)
+	}
+	if code := doConvoyAdd(store, []string{convoys[0].ID, second.ID}, &stdout, &stderr); code != 0 {
+		t.Fatalf("convoy add = %d, stderr: %s", code, stderr.String())
+	}
+
+	for _, card := range []beads.Bead{first, second} {
+		vars := buildSlingFormulaVars("mol-polecat-work", card.ID, nil, a, deps)
+		if got, ok := findVarValue(vars, "base_branch"); !ok || got != "integration/auth-rewrite" {
+			t.Errorf("%s base_branch var = %q, %v; want integration/auth-rewrite, true", card.ID, got, ok)
+		}
 	}
 }
 
