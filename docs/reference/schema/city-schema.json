@@ -2722,6 +2722,10 @@
           "type": "string",
           "description": "Prefix overrides the auto-derived bead ID prefix for this rig."
         },
+        "store_owner": {
+          "type": "string",
+          "description": "StoreOwner records who owns this rig's bead store. \"bd\" means the rig\nadopted an existing bd database: gc installs hooks only and never runs\nprovider init or rewrites the rig's .beads files. Empty means gc-managed."
+        },
         "default_branch": {
           "type": "string",
           "description": "DefaultBranch is the rig repository's mainline branch (e.g. \"main\",\n\"master\", \"develop\"). When set, routing formulas use this as the\ndefault merge target instead of probing origin/HEAD at sling time.\nCaptured by `gc rig add` from the rig's git config; set manually for\nrigs whose mainline isn't reachable via origin/HEAD."
@@ -2837,6 +2841,10 @@
         "default_merge_strategy": {
           "type": "string",
           "description": "DefaultMergeStrategy overrides the merge strategy `gc sling` stamps on\nbeads routed into this rig. Set to \"\" to clear the rig's default and go\nback to leaving merge_strategy unstamped."
+        },
+        "store_owner": {
+          "type": "string",
+          "description": "StoreOwner overrides who owns the rig's bead store. Mirrors\nRig.StoreOwner; \"bd\" marks a store whose provider init is skipped."
         },
         "suspended": {
           "type": "boolean",

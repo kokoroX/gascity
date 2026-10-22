@@ -3832,6 +3832,7 @@ type RigPatch struct {
 	Name                    string             `json:"Name"`
 	Path                    *string            `json:"Path"`
 	Prefix                  *string            `json:"Prefix"`
+	StoreOwner              *string            `json:"StoreOwner"`
 	Suspended               *bool              `json:"Suspended"`
 	SuspendedOnStart        *bool              `json:"SuspendedOnStart"`
 }

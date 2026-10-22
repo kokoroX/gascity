@@ -135,7 +135,7 @@ type commitAfterFirstLiveList struct {
 func (s *commitAfterFirstLiveList) List(query beads.ListQuery) ([]beads.Bead, error) {
 	items, err := s.Store.List(query)
 	if query.Live && s.pending != nil {
-		created, createErr := s.Store.Create(*s.pending)
+		created, createErr := s.Create(*s.pending)
 		if createErr != nil {
 			return nil, createErr
 		}

@@ -3955,7 +3955,9 @@ the reconciler skips them and gc hook returns empty. The rig's beads
 database remains accessible. Use "gc rig resume" to restore.
 
 Suspension state is stored in the runtime directory, not city.toml,
-so it is local to this machine and does not need to be committed.
+so it is local to this machine and does not need to be committed. Use
+--keep-patrol-wisps to leave open patrol wisps for inspection; otherwise they
+are closed and the role pours a fresh one on its next start.
 
 ```
 gc rig suspend [name] [flags]
@@ -3964,6 +3966,7 @@ gc rig suspend [name] [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | Output in JSONL format |
+| `--keep-patrol-wisps` | bool |  | leave patrol wisps open when suspending the rig |
 
 ## gc runtime
 
@@ -4938,7 +4941,9 @@ Use --timeout=DURATION to cap the wall-clock time gc stop will spend
 before giving up; the default budgets configured session interrupt and
 stop waves, the configured shutdown grace wait, and a second orphan
 cleanup pass. Use --force to skip the interrupt grace period and go
-straight to kill.
+straight to kill. Use --keep-patrol-wisps to leave open patrol wisps for
+inspection; otherwise gc stop closes them so their roles can pour fresh ones
+on the next start.
 
 ```
 gc stop [path|name] [flags]
@@ -4948,6 +4953,7 @@ gc stop [path|name] [flags]
 |------|------|---------|-------------|
 | `--force` | bool |  | skip the interrupt grace period and force-kill all sessions immediately |
 | `--json` | bool |  | emit JSONL summary |
+| `--keep-patrol-wisps` | bool |  | leave patrol wisps open during shutdown |
 | `--timeout` | duration | `0s` | wall-clock cap for the stop sequence (0 = derive from city config) |
 
 ## gc storage

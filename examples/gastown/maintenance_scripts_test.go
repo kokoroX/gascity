@@ -3757,7 +3757,7 @@ exit 0
 				"GC_DOLT_USER": "root", "GC_DOLT_PASSWORD": "",
 				"PATROL_ROW": tc.row, "PATROL_SESSIONS": tc.sessions,
 				"PATROL_LIST_FAIL": map[bool]string{true: "1", false: "0"}[tc.listFails],
-				"PATH": binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"PATH":             binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 			}
 			if tc.name == "orphan dry run" {
 				env["GC_REAPER_DRY_RUN"] = "1"

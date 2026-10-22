@@ -7407,6 +7407,12 @@
               "null"
             ]
           },
+          "StoreOwner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "Suspended": {
             "type": [
               "boolean",
@@ -7426,6 +7432,7 @@
           "Prefix",
           "DefaultBranch",
           "DefaultMergeStrategy",
+          "StoreOwner",
           "Suspended",
           "SuspendedOnStart",
           "BeadsProxiedIdleTimeout"
