@@ -1,0 +1,34 @@
+# Pinned release binaries that tests execute, selected by target platform:
+# the Linux x86_64 archives CI runs (MODULE.bazel, pinned to the same
+# sha256s as .github/scripts/install-bd-archive.sh), or their darwin-arm64
+# builds for local macOS runs. A rootpath through an alias names the
+# selected archive's file.
+
+package(default_visibility = ["//visibility:public"])
+
+# Read by //scripts:scripts_test (bd_contract_pins_test.go).
+exports_files(["BUILD.bazel"])
+
+alias(
+    name = "bd_v1_3_1",
+    actual = select({
+        "@platforms//os:macos": "@bd_bin_v1_3_1_darwin_arm64//:bd",
+        "//conditions:default": "@bd_bin_v1_3_1//:bd",
+    }),
+)
+
+alias(
+    name = "bd_v1_3_0",
+    actual = select({
+        "@platforms//os:macos": "@bd_bin_v1_3_0_darwin_arm64//:bd",
+        "//conditions:default": "@bd_bin_v1_3_0//:bd",
+    }),
+)
+
+alias(
+    name = "oasdiff",
+    actual = select({
+        "@platforms//os:macos": "@oasdiff_bin_darwin//:oasdiff",
+        "//conditions:default": "@oasdiff_bin//:oasdiff",
+    }),
+)

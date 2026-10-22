@@ -13,8 +13,11 @@ import (
 // archives (MODULE.bazel http_archive), not against a bd installed by a
 // go-test job. These pins keep each cell testing the bd deps.env names:
 //
-//   - every bd_bin_v* archive downloads that version's linux_amd64 release
-//     with the sha256 .github/scripts/install-bd-archive.sh pins for it;
+//   - every bd_bin_v* archive downloads that version's linux_amd64 release,
+//     and its bd_bin_v*_darwin_arm64 twin the darwin_arm64 one, each with the
+//     sha256 .github/scripts/install-bd-archive.sh pins for it;
+//   - each cell names bd through //third_party/test_bins's bd_v* alias, which
+//     selects that version's linux and darwin archives;
 //   - //test/acceptance:bd_cli_contract_prev_test runs BD_PREV_VERSION's bd;
 //   - //test/acceptance:bd_cli_contract_current_test and
 //     //internal/beads:bd_conditional_release_contract_test (bd first on
@@ -41,6 +44,7 @@ func TestBdContractCellsRunTheDepsEnvPins(t *testing.T) {
 	acceptance := read("test/acceptance/BUILD.bazel")
 	beadsBuild := read("internal/beads/BUILD.bazel")
 	makefile := read("Makefile")
+	testBins := read("third_party/test_bins/BUILD.bazel")
 
 	pin := func(key string) string {
 		t.Helper()
@@ -53,24 +57,42 @@ func TestBdContractCellsRunTheDepsEnvPins(t *testing.T) {
 	repoFor := func(version string) string {
 		return "bd_bin_" + strings.NewReplacer(".", "_", "-", "_").Replace(version)
 	}
-	checkArchive := func(version string) {
+	aliasFor := func(version string) string {
+		return "//third_party/test_bins:bd_" + strings.NewReplacer(".", "_", "-", "_").Replace(version)
+	}
+	checkPlatformArchive := func(version, repo, platform string) {
 		t.Helper()
-		repo := repoFor(version)
 		block := regexp.MustCompile(`(?ms)^http_archive\(\n    name = "` + repo + `",\n.*?^\)`).FindString(module)
 		if block == "" {
 			t.Fatalf("MODULE.bazel has no http_archive %s for bd %s", repo, version)
 		}
 		bare := strings.TrimPrefix(version, "v")
-		url := fmt.Sprintf("https://github.com/gastownhall/beads/releases/download/%s/beads_%s_linux_amd64.tar.gz", version, bare)
+		url := fmt.Sprintf("https://github.com/gastownhall/beads/releases/download/%s/beads_%s_%s.tar.gz", version, bare, platform)
 		if !strings.Contains(block, `"`+url+`"`) {
 			t.Errorf("%s does not download %s:\n%s", repo, url, block)
 		}
-		sha := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(version) + `:linux_amd64\) expected_sha="([0-9a-f]{64})"`).FindStringSubmatch(installer)
+		sha := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(version) + `:` + platform + `\) expected_sha="([0-9a-f]{64})"`).FindStringSubmatch(installer)
 		if sha == nil {
-			t.Fatalf("install-bd-archive.sh pins no linux_amd64 sha256 for %s", version)
+			t.Fatalf("install-bd-archive.sh pins no %s sha256 for %s", platform, version)
 		}
 		if !strings.Contains(block, `sha256 = "`+sha[1]+`"`) {
 			t.Errorf("%s sha256 differs from install-bd-archive.sh's %s:\n%s", repo, sha[1], block)
+		}
+	}
+	checkArchive := func(version string) {
+		t.Helper()
+		repo := repoFor(version)
+		checkPlatformArchive(version, repo, "linux_amd64")
+		checkPlatformArchive(version, repo+"_darwin_arm64", "darwin_arm64")
+		name := strings.TrimPrefix(aliasFor(version), "//third_party/test_bins:")
+		alias := regexp.MustCompile(`(?ms)^alias\(\n    name = "` + name + `",\n.*?^\)`).FindString(testBins)
+		for _, want := range []string{
+			`"@platforms//os:macos": "@` + repo + `_darwin_arm64//:bd",`,
+			`"//conditions:default": "@` + repo + `//:bd",`,
+		} {
+			if !strings.Contains(alias, want) {
+				t.Errorf("third_party/test_bins alias %s lacks %s:\n%s", name, want, alias)
+			}
 		}
 	}
 	rule := func(build, name string) string {
@@ -94,7 +116,7 @@ func TestBdContractCellsRunTheDepsEnvPins(t *testing.T) {
 		"bd_cli_contract_current_test": current,
 	} {
 		r := rule(acceptance, name)
-		label := "@" + repoFor(version) + "//:bd"
+		label := aliasFor(version)
 		for _, want := range []string{
 			// The cell's bd is the only one: named for helpers.FindBD and
 			// first on PATH, over the one :acceptance_test's env puts there.
@@ -118,8 +140,8 @@ func TestBdContractCellsRunTheDepsEnvPins(t *testing.T) {
 		`args = ["-test.run=^` + testName[1] + `$$"],`,
 		`"GC_REQUIRE_BD_CONDITIONAL_RELEASE": "1",`,
 		`gotags = ["integration"],`,
-		`"GC_TEST_TOOL_PATHS": "$(rootpath @` + repoFor(current) + `//:bd)",`,
-		`data = ["@` + repoFor(current) + `//:bd"],`,
+		`"GC_TEST_TOOL_PATHS": "$(rootpath ` + aliasFor(current) + `)",`,
+		`data = ["` + aliasFor(current) + `"],`,
 	} {
 		if !strings.Contains(r, want) {
 			t.Errorf("bd_conditional_release_contract_test lacks %s:\n%s", want, r)

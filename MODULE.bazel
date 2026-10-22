@@ -438,12 +438,32 @@ exports_files(["bd"])
 """,
 )
 
+# The darwin-arm64 builds of the pinned bd and oasdiff releases, for local
+# macOS runs; //third_party/test_bins selects them by target platform.
+http_archive(
+    name = "bd_bin_v1_3_1_darwin_arm64",
+    urls = ["https://github.com/gastownhall/beads/releases/download/v1.3.1/beads_1.3.1_darwin_arm64.tar.gz"],
+    sha256 = "508ba807996e2b9c992c538a6f405f2fc7d2e16cf8b4e5b0d1bf9fe860367007",
+    build_file_content = """
+exports_files(["bd"])
+""",
+)
+
 # deps.env BD_PREV_VERSION, the minimum-supported bd: the "previous" cell of
 # the bd CLI contract (//test/acceptance:bd_cli_contract_prev_test).
 http_archive(
     name = "bd_bin_v1_3_0",
     urls = ["https://github.com/gastownhall/beads/releases/download/v1.3.0/beads_1.3.0_linux_amd64.tar.gz"],
     sha256 = "2f92b904ecf35b607e44dc5c39229173af69c54f1183e8d709f1773540cdcf3b",
+    build_file_content = """
+exports_files(["bd"])
+""",
+)
+
+http_archive(
+    name = "bd_bin_v1_3_0_darwin_arm64",
+    urls = ["https://github.com/gastownhall/beads/releases/download/v1.3.0/beads_1.3.0_darwin_arm64.tar.gz"],
+    sha256 = "7cc77367d0b84c50243a1108bc1f73648699211257d414b917540bf868e6bb85",
     build_file_content = """
 exports_files(["bd"])
 """,
@@ -465,6 +485,15 @@ http_archive(
     name = "oasdiff_bin",
     urls = ["https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_linux_amd64.tar.gz"],
     sha256 = "43a4e328e2d13ba1552d760aa68d2485c75c5621f309f6ff64ae895188345247",
+    build_file_content = """
+exports_files(["oasdiff"])
+""",
+)
+
+http_archive(
+    name = "oasdiff_bin_darwin",
+    urls = ["https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_darwin_all.tar.gz"],
+    sha256 = "2a479337c15afdcbf0b1e89c0b4d0cf0176472dbc11483358fed1f831d1e46c5",
     build_file_content = """
 exports_files(["oasdiff"])
 """,

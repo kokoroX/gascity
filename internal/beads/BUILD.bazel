@@ -449,10 +449,10 @@ go_variant_test(
 go_variant_test(
     name = "bd_conditional_release_contract_test",
     args = ["-test.run=^TestBdStoreReleaseIfCurrentAgainstRealBd$$"],
-    data = ["@bd_bin_v1_3_1//:bd"],
+    data = ["//third_party/test_bins:bd_v1_3_1"],
     env = {
         "GC_REQUIRE_BD_CONDITIONAL_RELEASE": "1",
-        "GC_TEST_TOOL_PATHS": "$(rootpath @bd_bin_v1_3_1//:bd)",
+        "GC_TEST_TOOL_PATHS": "$(rootpath //third_party/test_bins:bd_v1_3_1)",
     },
     gotags = ["integration"],
     test = ":beads_test",
