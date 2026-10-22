@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,6 +73,12 @@ func installFakeDelegatedSystemctlHangingVerbWithUnitState(t *testing.T, verb st
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\ncase \" $* \" in *\" is-active \"*) exit %d ;; *\" %s \"*) exec sleep 5 ;; esac\nexit 0\n", argsFile, isActiveExit, verb)
 	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
+	}
+	// A first-exec scan can outlast a test's shortened job timeout before the
+	// shim records its argv: warm it, then drop that record.
+	warmTestExecutable(t, filepath.Join(dir, "systemctl"), "warm-up")
+	if err := os.Remove(argsFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removing warm-up argv: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsFile

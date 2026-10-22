@@ -1311,6 +1311,16 @@ func TestInitRunDoltConfigGetRetriesSlowProbeOnLoadedHost(t *testing.T) {
 	if err := os.WriteFile(doltPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A first-exec scan can spend the whole 300ms first budget before the
+	// stub writes its marker, sending the retry down the slow path too: warm
+	// it on the fast path, then reset the marker.
+	if err := os.WriteFile(marker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warmTestExecutable(t, doltPath)
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	value, err := initRunDoltConfigGet(context.Background(), "user.name")

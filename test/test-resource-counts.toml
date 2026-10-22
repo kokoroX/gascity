@@ -853,6 +853,11 @@ resource = "subprocess"
 calls = 2
 
 [[count]]
+path = "cmd/gc/lifecycle_coordination_test.go"
+resource = "subprocess"
+calls = 1
+
+[[count]]
 path = "cmd/gc/live_submit_probe_test.go"
 resource = "fixed_sleep"
 calls = 5

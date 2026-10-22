@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +44,31 @@ exit 0
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	prior, readErr := os.ReadFile(logFile)
+	warmTestExecutable(t, script, "warm-up")
+	if readErr == nil {
+		if err := os.WriteFile(logFile, prior, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := os.Remove(logFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
 	return script
+}
+
+// warmTestExecutable runs a test-written executable once with args, so the
+// test's first timed exec of it starts at once. macOS scans a new executable
+// on its first exec (90ms to 2s on a loaded host), which outlasts the short
+// budgets and bounds these tests set; other platforms have no such cost and
+// skip the run. Callers undo whatever the warm-up run records.
+func warmTestExecutable(t *testing.T, path string, args ...string) {
+	t.Helper()
+	if goruntime.GOOS != "darwin" {
+		return
+	}
+	if out, err := exec.Command(path, args...).CombinedOutput(); err != nil {
+		t.Fatalf("warming %s: %v: %s", path, err, out)
+	}
 }
 
 // readOpLog reads the spy script's operation log and returns the lines.
