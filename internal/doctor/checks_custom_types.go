@@ -321,10 +321,19 @@ func customTypesStoreEnv(ctx *CheckContext, dir string) ([]string, error) {
 		}
 		overrides["GC_DOLT_HOST"] = target.Host
 		overrides["GC_DOLT_PORT"] = target.Port
-		overrides["GC_DOLT_USER"] = target.User
 		overrides["BEADS_DOLT_SERVER_HOST"] = target.Host
 		overrides["BEADS_DOLT_SERVER_PORT"] = target.Port
-		overrides["BEADS_DOLT_SERVER_USER"] = target.User
+		// The user is authentication, not a store selector: a recorded one
+		// wins, and a scope that records none (a bd-owned rig whose
+		// config.yaml has no dolt.user) keeps the inherited one. Projecting
+		// the empty value would make bd connect as root.
+		if user := strings.TrimSpace(target.User); user != "" {
+			overrides["GC_DOLT_USER"] = user
+			overrides["BEADS_DOLT_SERVER_USER"] = user
+		} else {
+			delete(overrides, "GC_DOLT_USER")
+			delete(overrides, "BEADS_DOLT_SERVER_USER")
+		}
 		carryAmbientTLS = target.External && !contract.DoltHostIsLocal(target.Host)
 	}
 
