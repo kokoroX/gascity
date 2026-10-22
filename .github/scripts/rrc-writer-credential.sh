@@ -91,7 +91,8 @@ subject=$(openssl x509 -in "$dir/rrc-writer.crt" -noout -subject -nameopt RFC225
 	echo "::error::rrc writer mint returned no certificate" >&2
 	exit 1
 }
-rdns=$(tr ',' '\n' <<<"${subject#subject=}")
+# LibreSSL (macOS) prints "subject= CN=...", OpenSSL 3 "subject=CN=...".
+rdns=$(tr ',' '\n' <<<"${subject#subject=}" | sed 's/^[[:space:]]*//')
 cn=$(sed -n 's/^CN=//p' <<<"$rdns")
 org=$(sed -n 's/^O=//p' <<<"$rdns")
 if ! [[ $cn =~ ^rbe-rrc-writer(-[a-z0-9]+)?$ ]] || [ "$org" != gascity ]; then
