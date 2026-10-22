@@ -2992,6 +2992,7 @@ export type RigPatch = {
     Name: string;
     Path: string | null;
     Prefix: string | null;
+    StoreOwner: string | null;
     Suspended: boolean | null;
     SuspendedOnStart: boolean | null;
 };

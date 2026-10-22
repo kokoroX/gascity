@@ -774,6 +774,7 @@ Rig defines an external project registered in the city.
 | `name` | string | **yes** |  | Name is the unique identifier for this rig. |
 | `path` | string |  |  | Path is the absolute filesystem path to the rig's repository. |
 | `prefix` | string |  |  | Prefix overrides the auto-derived bead ID prefix for this rig. |
+| `store_owner` | string |  |  | StoreOwner records who owns this rig's bead store. "bd" means the rig adopted an existing bd database: gc installs hooks only and never runs provider init or rewrites the rig's .beads files. Empty means gc-managed. |
 | `default_branch` | string |  |  | DefaultBranch is the rig repository's mainline branch (e.g. "main", "master", "develop"). When set, routing formulas use this as the default merge target instead of probing origin/HEAD at sling time. Captured by `gc rig add` from the rig's git config; set manually for rigs whose mainline isn't reachable via origin/HEAD. |
 | `default_merge_strategy` | string |  |  | DefaultMergeStrategy is the merge strategy `gc sling` stamps on a bead routed into this rig when the caller passes no --merge flag. One of "direct", "mr", or "local"; empty leaves the bead unstamped, which consumers read as their own implicit default. Set it to "mr" on rigs that deliver work through a pull request instead of a push to the target branch, so a bare `gc sling` records the shape the rig actually uses rather than one every caller has to remember to pass. |
 | `suspended` | boolean |  |  | Suspended is the deprecated pre-runtime-state suspension flag. Parsed for backwards compatibility and treated as an alias for SuspendedOnStart by [Rig.EffectiveSuspendedOnStart], so existing cities with `suspended = true` continue to start their rigs suspended after upgrade. Live suspend/resume commands no longer write this field. `gc doctor` flags it and offers `--fix` to rename to suspended_on_start. |
@@ -803,6 +804,7 @@ RigPatch modifies an existing rig identified by Name.
 | `prefix` | string |  |  | Prefix overrides the bead ID prefix. |
 | `default_branch` | string |  |  | DefaultBranch overrides the rig's recorded mainline branch. |
 | `default_merge_strategy` | string |  |  | DefaultMergeStrategy overrides the merge strategy `gc sling` stamps on beads routed into this rig. Set to "" to clear the rig's default and go back to leaving merge_strategy unstamped. |
+| `store_owner` | string |  |  | StoreOwner overrides who owns the rig's bead store. Mirrors Rig.StoreOwner; "bd" marks a store whose provider init is skipped. |
 | `suspended` | boolean |  |  | Suspended is the deprecated, pre-runtime-state suspension override. Parsed for backwards compatibility; `gc doctor` surfaces it as a warning and recommends the rename to SuspendedOnStart. No behavioral code path reads it. |
 | `suspended_on_start` | boolean |  |  | SuspendedOnStart overrides the rig's desired suspension state at city start. Mirrors Rig.SuspendedOnStart. |
 | `formula_vars` | map[string]string |  |  | FormulaVars adds or overrides rig-scoped formula var defaults. Additive merge: patch keys win over existing rig keys, unspecified keys are preserved. |

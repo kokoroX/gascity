@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
@@ -27,7 +28,7 @@ func closePatrolWisps(store beads.Store, assignees []string) (int, error) {
 		if !bead.Ephemeral || (bead.Status != "open" && bead.Status != "in_progress") {
 			continue
 		}
-		_, hasKind := bead.Metadata["gc.kind"]
+		_, hasKind := bead.Metadata[beadmeta.KindMetadataKey]
 		if !isPatrolWispTitle(bead.Title) || hasKind {
 			continue
 		}
@@ -61,7 +62,8 @@ func isPatrolWispTitle(title string) bool {
 // hasPatrolOwnerDepEdge reports whether a patrol wisp has a parent-child edge in either direction.
 func hasPatrolOwnerDepEdge(store interface {
 	DepList(id, direction string) ([]beads.Dep, error)
-}, id string) (bool, error) {
+}, id string,
+) (bool, error) {
 	for _, direction := range []string{"down", "up"} {
 		deps, err := store.DepList(id, direction)
 		if err != nil {

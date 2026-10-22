@@ -1578,6 +1578,7 @@ export const zRigPatch = z.object({
     Name: z.string(),
     Path: z.string().nullable(),
     Prefix: z.string().nullable(),
+    StoreOwner: z.string().nullable(),
     Suspended: z.boolean().nullable(),
     SuspendedOnStart: z.boolean().nullable()
 });

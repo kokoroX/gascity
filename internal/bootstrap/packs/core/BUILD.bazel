@@ -85,6 +85,8 @@ go_test(
         "pack_assets_test.go",
         "pack_formulas_test.go",
         "pack_orders_test.go",
+        "pack_polecat_continuation_group_test.go",
+        "pack_polecat_findings_store_test.go",
         "testenv_import_test.go",
     ],
     data = glob(
@@ -95,6 +97,7 @@ go_test(
     ],
     embed = [":core"],
     deps = [
+        "//internal/formula",
         "//internal/orders",
         "//internal/testenv",
         "@com_github_burntsushi_toml//:toml",
