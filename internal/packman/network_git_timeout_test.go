@@ -13,6 +13,11 @@ import (
 	"github.com/gastownhall/gascity/internal/processgroup/processgrouptest"
 )
 
+// warmUpArg is the first argument that makes the wedged-git shim return at
+// once, so a caller can pay macOS's first-exec scan before it times the shim.
+// No git subcommand is spelled this way, so the real calls never hit it.
+const warmUpArg = "--gc-warm-up"
+
 // wedgedRemote is what wedgedGit hands back: the remote URL the shim ignores,
 // plus the two artifacts its backgrounded child produces so a test can observe
 // the child's lifecycle without polling it.
@@ -79,13 +84,27 @@ func wedgedGit(t *testing.T) wedgedRemote {
 	// The 50ms cadence is the convention the other users of these helpers use
 	// (internal/orders, cmd/gc): it has to be well under the caller's stability
 	// window, or a live child idling between writes reads as a dead one.
+	//
+	// The warm-up branch exists for the same race one layer out: macOS scans an
+	// executable on its first exec (90ms on an idle host, seconds on a loaded
+	// one), which is itself longer than the shrunk deadline, so the shim can be
+	// killed before it reaches even that foreground write. The branch does
+	// nothing but let the scan happen off the clock; it exits before the
+	// heartbeat, so a warm-up leaves no artifact to undo.
 	script := "#!/bin/sh\n" +
+		"[ \"$1\" = " + warmUpArg + " ] && exit 0\n" +
 		"echo . >> " + w.HeartbeatPath + "\n" +
 		"{ while : ; do echo . >> " + w.HeartbeatPath + " ; " + sleep + " 0.05 ; done ; } &\n" +
 		"echo $! > " + w.PIDPath + "\n" +
 		"wait\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+	shim := filepath.Join(dir, "git")
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing git shim: %v", err)
+	}
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command(shim, warmUpArg).CombinedOutput(); err != nil {
+			t.Fatalf("warming the git shim: %v: %s", err, out)
+		}
 	}
 	t.Setenv("PATH", dir)
 	// A test that fails before the bound kills the group must not leave the

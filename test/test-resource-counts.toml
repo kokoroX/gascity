@@ -2028,6 +2028,11 @@ calls = 1
 tagged = true
 
 [[count]]
+path = "internal/packman/network_git_timeout_test.go"
+resource = "subprocess"
+calls = 1
+
+[[count]]
 path = "internal/packregistry/catalog_test.go"
 resource = "fixed_sleep"
 calls = 1
