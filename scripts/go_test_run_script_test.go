@@ -3,7 +3,6 @@ package scripts_test
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,10 +14,9 @@ import (
 // report; a Go test timeout prints its panic block; a hard kill with no
 // panic falls back to the log's tail; a pass exits 0 and leaves each output.
 func TestGoTestRunScript(t *testing.T) {
+	// Without coreutils' timeout on PATH (macOS), this exercises the script's
+	// own watchdog.
 	script := filepath.Join(repoRoot(t), "tools", "bazel", "rules", "go_test_run.sh")
-	if _, err := exec.LookPath("timeout"); err != nil {
-		t.Skip("timeout (coreutils) not on PATH")
-	}
 	noise := strings.Repeat("beads cache: reconciled rig=x\nstep line\n", 400) // a report well past the 400-line tail
 	for _, c := range []struct {
 		name, body, timeout string
@@ -74,5 +72,18 @@ func TestGoTestRunScript(t *testing.T) {
 				t.Errorf("a pass left no output: %v", err)
 			}
 		})
+	}
+}
+
+// go_test_run.sh gives the test binary the PATH `bazel test` gives it when
+// the action names none; the two copies must not drift.
+func TestGoTestRunScriptDefaultsToThePinnedTestPath(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "tools", "bazel", "rules", "go_test_run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `export PATH="${PATH:-` + bazelPinnedTestPath + `}"`
+	if !strings.Contains(string(data), want) {
+		t.Errorf("go_test_run.sh lacks %s", want)
 	}
 }
