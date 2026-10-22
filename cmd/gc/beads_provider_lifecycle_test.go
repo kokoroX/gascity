@@ -14123,15 +14123,21 @@ func TestGcBeadsBdProviderOwnedLifecycleUsesBdBoundary(t *testing.T) {
 		name      string
 		transport string
 		target    string
+		user      string
+		unsetUser bool
+		wantUser  bool
 		wantIdle  bool
 		wantArgs  []string
 	}{
-		{name: "proxied local init pins the proxy resident", transport: "proxied", target: "local", wantIdle: true},
+		{name: "proxied local init pins the proxy resident", transport: "proxied", target: "local", user: "scope-user", wantIdle: true},
 		{
-			name: "proxied external init pins its local proxy resident", transport: "proxied", target: "external", wantIdle: true,
+			name: "proxied external init pins its local proxy resident", transport: "proxied", target: "external", user: "scope-user", wantIdle: true,
 			wantArgs: []string{"--proxied-server-external-host upstream.example.invalid", "--proxied-server-external-port 3306"},
 		},
-		{name: "direct local init has no proxy to pin", transport: "direct", target: "local"},
+		{name: "direct local init has no proxy to pin", transport: "direct", target: "local", user: "scope-user"},
+		{name: "direct external init forwards projected user", transport: "direct", target: "external", user: "gascity_hq_c32", wantUser: true},
+		{name: "direct external init keeps user as one argument", transport: "direct", target: "external", user: " scope user * ", wantUser: true},
+		{name: "direct external init omits unset user", transport: "direct", target: "external", unsetUser: true},
 		{
 			// bd persists the endpoint it was given at init and nowhere else.
 			// Without --server-host/--server-port it took its own default,
@@ -14145,7 +14151,8 @@ func TestGcBeadsBdProviderOwnedLifecycleUsesBdBoundary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "bd.log")
 			bdPath := filepath.Join(t.TempDir(), "bd")
-			if err := os.WriteFile(bdPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> "+strconv.Quote(logPath)+"\n"), 0o755); err != nil {
+			// Preserve argv boundaries to detect word splitting in user values.
+			if err := os.WriteFile(bdPath, []byte("#!/bin/sh\nprintf '%s\\0' \"$@\" >> "+strconv.Quote(logPath)+"\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(scriptPath, "init", scopeDir, "prov")
@@ -14162,6 +14169,9 @@ func TestGcBeadsBdProviderOwnedLifecycleUsesBdBoundary(t *testing.T) {
 				"GC_DOLT_HOST=upstream.example.invalid",
 				"GC_DOLT_PORT=3306",
 			)
+			if !tt.unsetUser {
+				cmd.Env = append(cmd.Env, "BEADS_DOLT_SERVER_USER="+tt.user)
+			}
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("gc-beads-bd init: %v\n%s", err, out)
 			}
@@ -14169,7 +14179,25 @@ func TestGcBeadsBdProviderOwnedLifecycleUsesBdBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := strings.TrimSpace(string(data))
+			args := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
+			// bd init ignores BEADS_DOLT_SERVER_USER and requires the flag.
+			userCount := 0
+			for i, arg := range args {
+				if arg == "--server-user" {
+					userCount++
+					if i+1 >= len(args) || args[i+1] != tt.user {
+						t.Fatalf("bd init argv = %q, want --server-user followed by %q", args, tt.user)
+					}
+				}
+			}
+			wantUserCount := 0
+			if tt.wantUser {
+				wantUserCount = 1
+			}
+			if userCount != wantUserCount {
+				t.Fatalf("bd init argv = %q, --server-user count = %d, want %d", args, userCount, wantUserCount)
+			}
+			got := strings.Join(args, " ")
 			if !strings.HasPrefix(got, "init --init-if-missing --quiet") {
 				t.Fatalf("bd init command = %q", got)
 			}
