@@ -776,6 +776,10 @@ func ensureFreshRigProviderOwnership(cityPath string, cfg *config.City) error {
 			if err := persistProviderScopeOwnership(cityPath, rig.Path, intent); err != nil {
 				return fmt.Errorf("record provider ownership for fresh rig %q: %w", rig.Name, err)
 			}
+		} else if err := rearmStaleProviderScopeOwnership(cityPath, rig.Path, intent); err != nil {
+			// Every rig here has no binding on disk, so a ready record over
+			// one is the residue `gc rig remove` leaves at a reused path.
+			return fmt.Errorf("re-arm stale provider ownership for rig %q: %w", rig.Name, err)
 		}
 	}
 	return nil
@@ -896,13 +900,18 @@ func ensureProviderScopeOwnershipBeforeInit(cityPath, scopeRoot string) error {
 	if !cityUsesManagedDoltBeadsLifecycle(cityPath) {
 		return nil
 	}
-	if _, owned, err := providerScopeOwnership(cityPath, scopeRoot); err != nil || owned {
+	_, owned, err := providerScopeOwnership(cityPath, scopeRoot)
+	if err != nil {
 		return err
 	}
 	initialized, err := scopeHasPersistedBeadsIdentity(scopeRoot)
 	if err != nil {
 		return fmt.Errorf("inspect scope beads identity: %w", err)
 	}
+	// An initialized scope's record describes what is on disk, journaled or
+	// not. Only an uninitialized scope needs an intent resolved here — either
+	// recorded for the first time, or re-armed when a ready record outlived
+	// the store it claims.
 	if initialized {
 		return nil
 	}
@@ -940,6 +949,12 @@ func ensureProviderScopeOwnershipBeforeInit(cityPath, scopeRoot string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if owned {
+		if err := rearmStaleProviderScopeOwnership(cityPath, scopeRoot, intent); err != nil {
+			return fmt.Errorf("re-arm stale provider ownership before store initialization: %w", err)
+		}
+		return nil
 	}
 	if err := persistProviderScopeOwnership(cityPath, scopeRoot, intent); err != nil {
 		return fmt.Errorf("record provider ownership before store initialization: %w", err)
@@ -1211,6 +1226,62 @@ func markProviderScopeOwnershipReady(cityPath, scopeRoot string) error {
 		}
 		clearSelectorExternalInitOptions(cityPath, scopeRoot)
 		return nil
+	})
+}
+
+// rearmStaleProviderScopeOwnership re-arms a ready ownership record whose scope
+// has no bd binding left on disk, so the init ahead initializes the scope
+// instead of pinging a store that is not there.
+//
+// `gc rig remove` keeps the record and only re-keys it to path:<dir>
+// (removeProviderScopeOwnershipRecord), which is what keeps a detached scope bd
+// still owns from being orphaned. Reusing that directory for a new rig resolved
+// that ready record, took runProviderOwnedScopeInit's ready -> start branch and
+// died inside bd with "no beads database found", and no gc verb cleared the
+// record. A ready record over a scope with neither .beads/metadata.json nor
+// .beads/config.yaml claims a store that does not exist, so re-arming it loses
+// nothing: the outcome is the one a path that was never used gets. A scope that
+// still carries a binding is a live claim and is left alone — a clone carries
+// the mode without the data, and validateProviderOwnedProxiedScopeStore refuses
+// that case on purpose.
+func rearmStaleProviderScopeOwnership(cityPath, scopeRoot string, intent providerScopeIntent) error {
+	intent, err := normalizeProviderScopeIntent(intent)
+	if err != nil {
+		return err
+	}
+	cityPath = normalizePathForCompare(cityPath)
+	scopeRoot = normalizePathForCompare(scopeRoot)
+	if cityPath == "" || scopeRoot == "" {
+		return fmt.Errorf("scope ownership requires city and scope paths")
+	}
+	key := providerScopeOwnershipKey(cityPath, scopeRoot)
+	return withProviderScopeOwnershipLock(cityPath, func() error {
+		journal, exists, err := loadProviderScopeOwnershipJournal(cityPath)
+		if err != nil || !exists {
+			return err
+		}
+		actualKey, current, recorded, err := providerScopeOwnershipRecordFromJournal(journal, cityPath, scopeRoot)
+		if err != nil || !recorded {
+			return err
+		}
+		if current.LifecycleOwner != providerScopeLifecycleOwner || current.State != providerScopeReady {
+			return nil
+		}
+		// Re-read the binding under the lock: a concurrent init may have
+		// materialized the scope since the caller classified it.
+		bound, err := scopeHasPersistedBeadsIdentity(scopeRoot)
+		if err != nil || bound {
+			return err
+		}
+		if existing, collision := journal.Scopes[key]; collision && !samePath(existing.ScopePath, scopeRoot) {
+			return fmt.Errorf("scope ownership journal key collision for %q", key)
+		}
+		delete(journal.Scopes, actualKey)
+		journal.Scopes[key] = providerScopeOwnershipEntry{
+			ScopePath: scopeRoot, LifecycleOwner: providerScopeLifecycleOwner,
+			State: providerScopeInitializing, Intent: intent,
+		}
+		return writeProviderScopeOwnershipJournal(cityPath, journal)
 	})
 }
 
