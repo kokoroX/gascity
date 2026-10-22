@@ -42,6 +42,20 @@ core_rig_names() {
     printf '%s\n' "$raw" | jq -r '.rigs[]? | select((.hq // false) == false and (.suspended // false) == false) | .name // empty' 2>/dev/null
 }
 
+# core_suspended_rig_names prints one suspended, non-hq rig name per line: the
+# rigs core_rig_names leaves out. A caller that can read a scope without
+# waking anything — an archive reading a store on an external server, say —
+# uses this to say which of them it still visits, and to report the rest as
+# deliberately skipped rather than dropping them without a word. Prints
+# nothing and returns 1 when the rig list cannot be read.
+core_suspended_rig_names() {
+    local raw
+    if ! raw=$(cd "$CITY_ABS" && gc rig list --json 2>/dev/null); then
+        return 1
+    fi
+    printf '%s\n' "$raw" | jq -r '.rigs[]? | select((.hq // false) == false and (.suspended // false) == true) | .name // empty' 2>/dev/null
+}
+
 # scope_select <city|rig> [rig-name] makes a scope current. SCOPE_DB is left
 # empty; scope_resolve_db asks bd for it.
 scope_select() {

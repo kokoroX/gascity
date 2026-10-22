@@ -1867,6 +1867,11 @@ resource = "subprocess"
 calls = 1
 
 [[count]]
+path = "internal/bootstrap/packs/core/jsonl_export_script_test.go"
+resource = "subprocess"
+calls = 1
+
+[[count]]
 path = "internal/cliauth/client_test.go"
 resource = "http_test_server"
 calls = 13
