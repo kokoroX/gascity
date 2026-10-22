@@ -4701,6 +4701,11 @@ op_provider_owned_init() {
                     [ -n "${GC_DOLT_HOST:-}" ] && [ -n "${GC_DOLT_PORT:-}" ] || die "direct-external init requires GC_DOLT_HOST and GC_DOLT_PORT"
                     set -- "$@" --server-host "$GC_DOLT_HOST" --server-port "$GC_DOLT_PORT"
                 fi
+                # bd init defaults to root and ignores BEADS_DOLT_SERVER_USER;
+                # forward the user gc projected for this external endpoint.
+                if [ -n "${BEADS_DOLT_SERVER_USER:-}" ]; then
+                    set -- "$@" --server-user "$BEADS_DOLT_SERVER_USER"
+                fi
             fi
             ;;
         proxied:local|proxied:external)
