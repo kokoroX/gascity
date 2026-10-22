@@ -740,9 +740,10 @@ git remotes on every run:
   is safe to run indefinitely; its only limitation is that the archive is
   not backed up off-box, so a disk failure on this host loses the archive
   alongside the live Dolt data.
-- **Push.** An `origin` remote is configured. Each run rebases onto
-  `origin/main` and pushes new commits so the archive survives a host
-  loss.
+- **Push.** An `origin` remote is configured. Each run rebases onto the
+  archive's checked-out branch on `origin` and pushes new commits to it so
+  the archive survives a host loss. The archive is created with the host's
+  `init.defaultBranch`, so that branch may be `master` rather than `main`.
 
 On each run `jsonl-export` logs the active mode to stderr on transitions
 (e.g. after you add or remove `origin`) and re-logs it at least weekly so

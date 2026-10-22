@@ -8939,6 +8939,74 @@ func TestJsonlExportPushBootstrapCreatesRemoteMainWhenMissing(t *testing.T) {
 	}
 }
 
+// The script creates the archive with a plain `git init`, so its branch comes
+// from the host's init.defaultBranch. A host that still defaults to master
+// must push master, not a hardcoded main the archive does not have.
+func TestJsonlExportPushesArchiveBranchCreatedFromHostDefaultBranch(t *testing.T) {
+	cityDir := t.TempDir()
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	gcLog := filepath.Join(t.TempDir(), "gc.log")
+	mailLog := filepath.Join(t.TempDir(), "gc-mail.log")
+	archiveRepo := filepath.Join(cityDir, "archive")
+	stateFile := filepath.Join(stateDir, "jsonl-export-state.json")
+
+	writeMultiRecordDoltStub(t, binDir, 5)
+	writeJsonlExportGCStub(t, binDir)
+
+	env := jsonlExportEnv(t, cityDir, binDir, stateDir, archiveRepo, gcLog, mailLog)
+	if err := os.WriteFile(env["GIT_CONFIG_GLOBAL"], []byte("[init]\n\tdefaultBranch = master\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runScript(t, coreScriptPath("jsonl-export.sh"), env)
+
+	branchOut, err := exec.Command("git", "-C", archiveRepo, "symbolic-ref", "--short", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git symbolic-ref archive HEAD: %v\n%s", err, branchOut)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != "master" {
+		t.Fatalf("expected the script to create the archive on the host default branch master, got %q", got)
+	}
+
+	remoteRepo := filepath.Join(t.TempDir(), "archive-remote.git")
+	if out, err := exec.Command("git", "init", "--bare", "-q", remoteRepo).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", archiveRepo, "remote", "add", "origin", remoteRepo).CombinedOutput(); err != nil {
+		t.Fatalf("git remote add origin: %v\n%s", err, out)
+	}
+
+	writeMultiRecordDoltStub(t, binDir, 6)
+	out, err := runScriptResult(t, coreScriptPath("jsonl-export.sh"), env)
+	if err != nil {
+		t.Fatalf("jsonl-export.sh failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "push: ok") {
+		t.Fatalf("expected the push to the new origin to succeed, got:\n%s", out)
+	}
+
+	localHeadOut, err := exec.Command("git", "-C", archiveRepo, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse local HEAD: %v\n%s", err, localHeadOut)
+	}
+	remoteHeadOut, err := exec.Command("git", "--git-dir", remoteRepo, "rev-parse", "refs/heads/master").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse remote master: %v\n%s", err, remoteHeadOut)
+	}
+	if got, want := strings.TrimSpace(string(remoteHeadOut)), strings.TrimSpace(string(localHeadOut)); got != want {
+		t.Fatalf("expected push to publish local HEAD on master: got remote %s want local %s", got, want)
+	}
+
+	stateData, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("ReadFile(state file): %v", err)
+	}
+	if strings.Contains(string(stateData), `"pending_archive_push":true`) {
+		t.Fatalf("expected pending_archive_push to clear after the push, got:\n%s", stateData)
+	}
+}
+
 func TestJsonlExportLegacyStateBackupRecoversPendingArchiveReplay(t *testing.T) {
 	cityDir := t.TempDir()
 	binDir := t.TempDir()

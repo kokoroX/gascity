@@ -351,27 +351,41 @@ has_pending_archive_push() {
     [ "$(read_state_json | jq -r '.pending_archive_push // false')" = "true" ]
 }
 
+# The archive pushes the branch it has checked out. `git init` names that
+# branch from the host's init.defaultBranch, so it is not always main.
+archive_branch() {
+    git symbolic-ref --short -q HEAD
+}
+
 refresh_archive_remote_main() {
-    git fetch origin main -q 2>/dev/null
+    local branch
+
+    branch=$(archive_branch) || return 1
+    git fetch origin "$branch" -q 2>/dev/null
 }
 
 archive_has_local_only_commits_from_tracking() {
+    local branch
     local merge_base
 
-    if ! git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+    branch=$(archive_branch) || return 1
+    if ! git rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
         return 1
     fi
-    merge_base=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null) || return 1
+    merge_base=$(git merge-base "refs/remotes/origin/$branch" HEAD 2>/dev/null) || return 1
     [ "$(git rev-list --count "$merge_base..HEAD" 2>/dev/null || echo "0")" -gt 0 ]
 }
 
 archive_has_local_only_commits() {
+    local branch
+
+    branch=$(archive_branch) || return 1
     if refresh_archive_remote_main >/dev/null 2>&1; then
         archive_has_local_only_commits_from_tracking
         return
     fi
     if archive_has_local_only_commits_from_tracking; then
-        echo "jsonl-export: fetch failed while checking deferred archive push; using existing origin/main tracking ref" >&2
+        echo "jsonl-export: fetch failed while checking deferred archive push; using existing origin/$branch tracking ref" >&2
         return 0
     fi
     return 1
@@ -614,6 +628,7 @@ push_archive_main() {
     local push_err
     local push_attempt
     local push_succeeded
+    local branch
 
     record_archive_push_failure() {
         local message="$1"
@@ -671,26 +686,33 @@ ESCALATION
         return 1
     }
 
+    if ! branch=$(archive_branch); then
+        record_archive_push_failure \
+            "jsonl-export: archive HEAD is not on a branch; cannot tell which branch to push" \
+            ""
+        return 1
+    fi
+
     # Branch on the actual git exit status, not on whether stderr is non-empty.
     # Successful git commands can emit benign stderr (e.g. "warning: redirecting
     # to https://...", credential-helper notes, protocol upgrade hints) which
     # would otherwise misclassify the run as a failure and falsely escalate.
-    if ! fetch_err=$(git fetch origin main -q 2>&1 >/dev/null); then
-        if git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+    if ! fetch_err=$(git fetch origin "$branch" -q 2>&1 >/dev/null); then
+        if git rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
             record_archive_push_failure \
-                "jsonl-export: fetching origin/main failed" \
+                "jsonl-export: fetching origin/$branch failed" \
                 "$fetch_err"
             return 1
         fi
-        echo "jsonl-export: origin/main missing; attempting initial push bootstrap" >&2
+        echo "jsonl-export: origin/$branch missing; attempting initial push bootstrap" >&2
     fi
 
-    if git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
-        if ! git merge-base --is-ancestor refs/remotes/origin/main HEAD >/dev/null 2>&1; then
-            if ! rebase_err=$(git rebase refs/remotes/origin/main 2>&1 >/dev/null); then
+    if git rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+        if ! git merge-base --is-ancestor "refs/remotes/origin/$branch" HEAD >/dev/null 2>&1; then
+            if ! rebase_err=$(git rebase "refs/remotes/origin/$branch" 2>&1 >/dev/null); then
                 git rebase --abort >/dev/null 2>&1 || true
                 record_archive_push_failure \
-                    "jsonl-export: rebase onto origin/main failed during archive push recovery" \
+                    "jsonl-export: rebase onto origin/$branch failed during archive push recovery" \
                     "$rebase_err"
                 return 1
             fi
@@ -709,7 +731,7 @@ ESCALATION
     # in tests to keep failure-path coverage fast.
     push_succeeded=false
     for push_attempt in 1 2 3; do
-        if push_err=$(git push origin main -q 2>&1 >/dev/null); then
+        if push_err=$(git push origin "$branch" -q 2>&1 >/dev/null); then
             push_succeeded=true
             if [ "$push_attempt" -gt 1 ]; then
                 echo "jsonl-export: push succeeded on retry attempt $push_attempt" >&2
@@ -722,13 +744,13 @@ ESCALATION
 
             # Refresh origin tracking before retry — a sibling rig may have
             # moved the ref while we slept.
-            if fetch_err=$(git fetch origin main -q 2>&1 >/dev/null); then
-                if git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1 \
-                    && ! git merge-base --is-ancestor refs/remotes/origin/main HEAD >/dev/null 2>&1; then
-                    if ! rebase_err=$(git rebase refs/remotes/origin/main 2>&1 >/dev/null); then
+            if fetch_err=$(git fetch origin "$branch" -q 2>&1 >/dev/null); then
+                if git rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1 \
+                    && ! git merge-base --is-ancestor "refs/remotes/origin/$branch" HEAD >/dev/null 2>&1; then
+                    if ! rebase_err=$(git rebase "refs/remotes/origin/$branch" 2>&1 >/dev/null); then
                         git rebase --abort >/dev/null 2>&1 || true
                         record_archive_push_failure \
-                            "jsonl-export: rebase onto origin/main failed during retry $push_attempt" \
+                            "jsonl-export: rebase onto origin/$branch failed during retry $push_attempt" \
                             "$rebase_err"
                         return 1
                     fi
@@ -741,7 +763,7 @@ ESCALATION
 
     if [ "$push_succeeded" != "true" ]; then
         record_archive_push_failure \
-            "jsonl-export: pushing archive main failed after 3 attempts" \
+            "jsonl-export: pushing archive $branch failed after 3 attempts" \
             "$push_err"
         return 1
     fi
