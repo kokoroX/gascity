@@ -29,7 +29,7 @@ go_test(
     data = glob(["testdata/**"]) + [
         "//:go.mod",
         "//internal/api:bazel_repo_srcs",
-        "@oasdiff_bin//:oasdiff",
+        "//third_party/test_bins:oasdiff",
         "@openapi_base_spec//:openapi.json",
         "@openapi_base_spec//:source.txt",
     ],
@@ -42,7 +42,7 @@ go_test(
         "GC_OPENAPI_BREAKING_BASE_SOURCE": "$(rootpath @openapi_base_spec//:source.txt)",
         "GC_OPENAPI_BREAKING_BASE_SPEC": "$(rootpath @openapi_base_spec//:openapi.json)",
         "GC_REQUIRE_OASDIFF": "1",
-        "GC_TEST_OASDIFF_BIN": "$(rootpath @oasdiff_bin//:oasdiff)",
+        "GC_TEST_OASDIFF_BIN": "$(rootpath //third_party/test_bins:oasdiff)",
     },
     deps = [
         "//internal/bazeltest",

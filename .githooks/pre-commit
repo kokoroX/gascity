@@ -26,20 +26,15 @@ if [ -n "$staged_go_files" ]; then
   # prints a `patch -p1` command for the ones with suggested fixes.
   make lint-changed LINT_CHANGED_SCOPE=staged || exit 1
 
-  # Regenerate the OpenAPI spec from the live Huma API and stage both
-  # canonical copies. Keeps the committed spec and the published
-  # Mintlify schema in lockstep with whatever the server actually
-  # serves.
-  go run ./cmd/genspec
+  # Regenerate the OpenAPI spec from the live Huma API, the generated Go
+  # client, and the config/schema docs derived from Go structs; stage every
+  # generated artifact so commits do not leave the worktree dirty. Keeps the
+  # committed spec and the published Mintlify schema in lockstep with
+  # whatever the server actually serves. Through make, not bare `go run`s:
+  # the Makefile exports the CGO flags the Dolt-dependent builds need.
+  make precommit-codegen
   git add internal/api/openapi.json docs/reference/schema/openapi.json docs/reference/schema/openapi.txt
-
-  go generate ./internal/api/genclient
   git add internal/api/genclient/client_gen.go
-
-  # Regenerate the config/schema docs derived from Go structs and
-  # stage every generated artifact so commits do not leave the
-  # worktree dirty.
-  go run ./cmd/genschema
   git add docs/reference/schema/city-schema.json docs/reference/schema/city-schema.txt docs/reference/config.md docs/reference/cli.md
 
   # Heavy `go test` fan-out runs in .githooks/pre-push, not here (#3628).
@@ -104,7 +99,7 @@ if [ -n "$staged_docs" ]; then
 fi
 
 # Re-read the index rather than reusing the pre-hook staged_spec snapshot:
-# the Go block above runs `go run ./cmd/genspec` and stages the regenerated
+# the Go block above runs `make precommit-codegen` and stages the regenerated
 # internal/api/openapi.json, so a Go-only commit that moves the API surface
 # only shows up here (#4627, #4607). Shared by both branches below so the
 # npm-absent fail-closed branch sees the same side effect the npm-present

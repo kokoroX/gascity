@@ -484,7 +484,7 @@ func TestPreCommitFailsClosedWhenGoBlockStagesSpecAsSideEffectAndNpmAbsent(t *te
 	// Stage ONLY a .go file -- internal/api/openapi.json is untouched by the
 	// user's own `git add`. The hook's own Go block (staged_go_files branch)
 	// regenerates and stages openapi.json as a SIDE EFFECT via
-	// `go run ./cmd/genspec`, which is exactly the #4627/#4607 staleness
+	// `make precommit-codegen`, which is exactly the #4627/#4607 staleness
 	// trap the npm-present branch re-reads for (fresh spec_changed) but
 	// which the npm-absent fail-closed branch used to miss (ga-jg89a5): it
 	// checked a snapshot taken before the hook ran at all, so it never saw
@@ -492,11 +492,13 @@ func TestPreCommitFailsClosedWhenGoBlockStagesSpecAsSideEffectAndNpmAbsent(t *te
 	writeTestFile(t, goFilePath, "package main\n\nfunc main() { println(1) }\n")
 	runGit("add", "main.go")
 
-	goStub := `#!/usr/bin/env bash
+	makeStub := `#!/usr/bin/env bash
 set -euo pipefail
-if [ "$1" = "run" ] && [ "$2" = "./cmd/genspec" ]; then
-  printf '{"changed":true}\n' > internal/api/openapi.json
-fi
+for goal in "$@"; do
+  if [ "$goal" = precommit-codegen ]; then
+    printf '{"changed":true}\n' > internal/api/openapi.json
+  fi
+done
 exit 0
 `
 
@@ -504,21 +506,21 @@ exit 0
 	cmd.Dir = tmpRepo
 	cmd.Env = []string{
 		"PATH=" + restrictedPathWithoutNpm(t, map[string]string{
-			"make": "#!/usr/bin/env bash\nexit 0\n",
-			// Stands in for format/lint/genspec/genclient/genschema/vet.
-			// Only `run ./cmd/genspec` has an observable side effect
-			// (rewriting internal/api/openapi.json, which the hook's own
-			// `git add` then stages), matching what the real cmd/genspec
-			// does against a live Huma API -- the rest of the Go block is
-			// exercised for control-flow only.
-			"go": goStub,
+			// Stands in for lint-changed, precommit-codegen and
+			// check-docs. Only the precommit-codegen goal has an observable
+			// side effect (rewriting internal/api/openapi.json, which the
+			// hook's own `git add` then stages), matching what the real
+			// cmd/genspec does against a live Huma API -- the rest of the Go
+			// block is exercised for control-flow only.
+			"make": makeStub,
+			"go":   "#!/usr/bin/env bash\nexit 0\n",
 		}),
 		"HOME=" + t.TempDir(),
 	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("pre-commit hook must fail when its own Go block stages internal/api/openapi.json as a side "+
-			"effect (go run ./cmd/genspec, triggered by staging a .go file) and npm is not on PATH -- the "+
+			"effect (make precommit-codegen, triggered by staging a .go file) and npm is not on PATH -- the "+
 			"generated TS client can't be regenerated, so the commit would silently ship a stale client with "+
 			"no enforcement until CI runs. Hook exited 0, output:\n%s", out)
 	}

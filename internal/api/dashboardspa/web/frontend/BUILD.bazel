@@ -146,6 +146,14 @@ js_test(
         "@chromium_runtime_noble_amd64//:sysroot",
         "@chromium_runtime_noble_amd64//:usr/lib/x86_64-linux-gnu/libnss3.so",
     ],
+    # The pinned browser and its runtime package set are Linux x86_64 builds,
+    # the platform bazel.yml's unit lane runs them on; other hosts skip the
+    # target, and skipping it keeps them from assembling a Linux sysroot
+    # whose post-processing needs GNU coreutils and bash 4 globstar.
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
 )
 
 exports_files(["package.json"])

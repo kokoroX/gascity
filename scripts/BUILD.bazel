@@ -197,6 +197,7 @@ go_test(
         "//test:BUILD.bazel",
         "//test/acceptance:BUILD.bazel",
         "//test/integration:BUILD.bazel",
+        "//third_party/test_bins:BUILD.bazel",
         "//tools/bazel/rules:go_repository_tools.bzl",
         "//tools/bazel/rules:go_test_run.sh",
         "//tools/bazel/rules:openapi_base_spec.bzl",
