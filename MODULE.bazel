@@ -23,6 +23,10 @@ bazel_dep(name = "toolchains_llvm", version = "1.11.0")
 # Loaded by @llvm_dist_linux_x86_64's BUILD file (toolchains_llvm's template).
 bazel_dep(name = "rules_cc", version = "0.2.17")
 
+# Constraint values for host-specific test targets (//:goreleaser_check_test).
+# The version the module graph already resolves.
+bazel_dep(name = "platforms", version = "1.1.0")
+
 # sh_test / py_test for the repo's shell guards and CI-policy unit tests
 # (Bazel 9 has no native shell or Python rules). Same versions the rest of
 # the module graph already resolves.
@@ -162,7 +166,9 @@ llvm_dist(
 # distribution table and fetched only there. Once any toolchain_root is set,
 # toolchains_llvm creates no stock distribution of its own and fails every
 # build on a host no root covers. Not hermetic there: no sysroot, so cgo
-# uses the host's headers and libraries (ICU included), as before.
+# uses the host's headers and libraries (ICU included), as before; macOS
+# links with the host ld (llvm.toolchain's linker below and
+# engdocs/bazel-quickstart.md).
 llvm_host_dist = use_repo_rule("@toolchains_llvm//toolchain:rules.bzl", "llvm")
 
 llvm_host_dist(
@@ -177,6 +183,18 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
+    # macOS links with the host's own ld (`xcrun --find ld`), not the
+    # distribution's ld64.lld: macOS has no sysroot here, so links read the
+    # host SDK's .tbd stubs, and an SDK newer than the pinned lld fails to
+    # parse (LLVM 22's lld rejects macOS 27's arm64e.x1 architecture token,
+    # leaving every libSystem symbol undefined). The host ld always matches
+    # the host SDK. Linux targets keep the hermetic lld.
+    linker = {"darwin-aarch64": "auto"},
+    # macOS ships no ICU headers, and Homebrew's icu4c (go-icu-regex's cgo
+    # dependency) is keg-only, outside the default search paths: point cgo
+    # at it, as the Makefile does for the Go-native targets.
+    extra_compile_flags = {"darwin-aarch64": ["-I/opt/homebrew/opt/icu4c/include"]},
+    extra_link_flags = {"darwin-aarch64": ["-L/opt/homebrew/opt/icu4c/lib"]},
     # The sysroot's libstdc++, linked dynamically as host-gcc builds did:
     # ICU's libraries are built against it.
     stdlib = {"linux-x86_64": "dynamic-stdc++"},

@@ -148,7 +148,9 @@ while IFS= read -r suite; do
         echo "ROW-GUARD: $suite_rel:$lineno direct newSplitEnv bypasses the fan-out helpers (pins one topology): ${body#	}"
         violations=$((violations + 1))
     done <<< "$(code_hits "$suite" "$direct_env_re")"
-done < <(grep -RlE "$invariant_re" "$scan_dir" --include='*_test.go' | sort)
+# find -L, not grep -R: Bazel runfiles are symlinks, which BSD grep -R (macOS)
+# skips.
+done < <(find -L "$scan_dir" -type f -name '*_test.go' -print0 | xargs -0 grep -lE "$invariant_re" | sort)
 
 # Rule C: the guard must be policing something.
 if (( suite_files == 0 )); then

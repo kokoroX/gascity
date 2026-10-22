@@ -46,6 +46,17 @@ SURFACE=(
 
 fail() { echo "check-eventexport-isolation: FAIL: $1" >&2; exit 1; }
 
+# grep_surface ARGS... PATH... runs grep ARGS over every file under PATHs.
+# Bazel runfiles trees are symlink farms, and BSD grep -R (macOS) skips
+# symlinked files, so files are listed with find -L rather than grep -R.
+grep_surface() {
+  local args=() paths=()
+  while [ "$1" != "--" ]; do args+=("$1"); shift; done
+  shift
+  paths=("$@")
+  find -L "${paths[@]}" -type f -print0 | xargs -0 grep -H "${args[@]}"
+}
+
 # 1. Brand-free. run_id/session_id are transported as JSON envelope FIELDS, never
 # HTTP headers, so x-gc-* must not appear either — header transport is the
 # commercial fabric that lives OUTSIDE the OSS. The 'gascity\.com' token is the
@@ -54,7 +65,7 @@ fail() { echo "check-eventexport-isolation: FAIL: $1" >&2; exit 1; }
 # module path github.com/gastownhall/gascity has no '.com' after 'gascity', so
 # neither false-positives.
 BRAND='gasworks|works\.gascity|gascity\.com|manifold|events-ingest|x-gc-'
-hits=$(grep -RniE "$BRAND" "${SURFACE[@]}" 2>/dev/null || true)
+hits=$(grep_surface -niE "$BRAND" -- "${SURFACE[@]}" 2>/dev/null || true)
 if [ -n "$hits" ]; then
   echo "$hits" >&2
   fail "brand/commercial token in the OSS event-export surface (see above)"
@@ -63,7 +74,7 @@ fi
 # 2. One source of truth: each projection primitive defined exactly once in
 # non-test code across the surface.
 for sym in 'allowedTypes = map' 'func ActorHash' 'func CityHash' 'func safeRef'; do
-  files=$(grep -Rl "$sym" pkg/eventexport internal/eventfeed cmd/gc/event_export.go 2>/dev/null || true)
+  files=$(grep_surface -l "$sym" -- pkg/eventexport internal/eventfeed cmd/gc/event_export.go 2>/dev/null || true)
   n=$(printf '%s\n' "$files" | grep -v '_test.go' | grep -c . || true)
   [ "$n" = "1" ] || fail "expected exactly one definition of '$sym' in the surface, found $n"
 done
