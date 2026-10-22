@@ -277,6 +277,77 @@ func TestCustomTypesStoreEnvProjectsDoltliteBackend(t *testing.T) {
 	}
 }
 
+// TestCustomTypesStoreEnvServerScopeUserFallsBackToInherited pins the user
+// projection for a bd-owned rig in dolt_mode=server. The rig's endpoint comes
+// from metadata.json, and its config.yaml records no dolt.user, so the
+// resolved target carries no user. Projecting that empty value cleared the
+// inherited BEADS_DOLT_SERVER_USER and bd fell back to root, which the
+// endpoint rejects ("Access denied for user 'root'"). An empty resolved user
+// must leave the inherited one in place; a recorded one still wins.
+func TestCustomTypesStoreEnvServerScopeUserFallsBackToInherited(t *testing.T) {
+	tests := []struct {
+		name       string
+		configYAML string
+		wantUser   string
+	}{
+		{
+			name:       "no recorded user keeps the inherited one",
+			configYAML: "issue-prefix: JikeRental\ndolt.auto-start: false\n",
+			wantUser:   "inherited-user",
+		},
+		{
+			name:       "recorded user replaces the inherited one",
+			configYAML: "issue-prefix: JikeRental\ndolt.auto-start: false\ndolt.user: recorded-user\n",
+			wantUser:   "recorded-user",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cityDir := t.TempDir()
+			rigDir := t.TempDir()
+			beadsDir := filepath.Join(rigDir, ".beads")
+			if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "JikeRental_p3a",
+  "dolt_server_host": "dolt.example.test",
+  "dolt_server_port": 3307
+}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(beadsDir, "config.yaml"), []byte(tt.configYAML), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("BEADS_DOLT_SERVER_USER", "inherited-user")
+			t.Setenv("GC_DOLT_USER", "inherited-user")
+
+			environ, err := customTypesStoreEnv(&CheckContext{CityPath: cityDir}, rigDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make(map[string]string, len(environ))
+			for _, entry := range environ {
+				key, value, _ := strings.Cut(entry, "=")
+				got[key] = value
+			}
+
+			for _, key := range []string{"BEADS_DOLT_SERVER_USER", "GC_DOLT_USER"} {
+				if got[key] != tt.wantUser {
+					t.Errorf("%s = %q, want %q", key, got[key], tt.wantUser)
+				}
+			}
+			if got["BEADS_DOLT_SERVER_HOST"] != "dolt.example.test" || got["BEADS_DOLT_SERVER_PORT"] != "3307" {
+				t.Errorf("endpoint = %q:%q, want the recorded dolt.example.test:3307",
+					got["BEADS_DOLT_SERVER_HOST"], got["BEADS_DOLT_SERVER_PORT"])
+			}
+		})
+	}
+}
+
 // TestCustomTypesCheck_TableDrift proves detect+heal of the bug this bead
 // fixes: config.yaml's types.custom CSV can list a type (e.g. "step") that
 // the normalized custom_types TABLE doesn't have a row for. bd's create
