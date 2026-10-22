@@ -7,24 +7,42 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
-// clearedSessionAffinityMetadata returns a metadata map with every
-// beadmeta.SessionAffinityMetadataKeys entry set to the empty string. cmd/gc
-// clears affinity by persisting an empty value rather than deleting the key
-// (as internal/dispatch does) because these helpers feed
+// clearedReleaseAffinityMetadata returns a metadata map with gc.session_affinity
+// and the stranded stamps set to the empty string, for a release that moves a
+// claim off a dead or departing session. It does NOT clear
+// gc.continuation_group: a group names a segment of one workflow ("these steps
+// run in one session"), not the session that held them, so the group must
+// outlive the released claim. The next session to claim
+// any step of the segment then preassigns the rest through
+// preassignHookContinuationGroup. Clearing it here left the restored segment
+// unprotected and let concurrent cards' steps cross sessions.
+//
+// cmd/gc clears affinity by persisting an empty value rather than deleting the
+// key (as internal/dispatch does) because these helpers feed
 // beads.UpdateOpts.Metadata, whose merge only touches supplied keys. Every
 // consumer treats the keys as absent when strings.TrimSpace is empty, so
 // empty-value and deleted are equivalent.
-func clearedSessionAffinityMetadata() map[string]string {
+//
+// Re-routing paths that break the segment itself (graph re-decoration,
+// retry-to-pool, reopen-source) clear the whole
+// beadmeta.SessionAffinityMetadataKeys set instead.
+func clearedReleaseAffinityMetadata() map[string]string {
 	metadata := make(map[string]string, len(beadmeta.SessionAffinityMetadataKeys))
 	for _, key := range beadmeta.SessionAffinityMetadataKeys {
+		if key == beadmeta.ContinuationGroupMetadataKey {
+			continue
+		}
 		metadata[key] = ""
 	}
 	return metadata
 }
 
 // clearSessionAffinityMetadataOnBead persists an empty value for every
-// session-affinity key on beadID. See clearedSessionAffinityMetadata for
-// why cmd/gc clears by empty value rather than key deletion.
+// session-affinity key on beadID, continuation group included. It is for
+// re-routing paths that end the segment itself (reopen-source re-slings the
+// source to a new workflow), not for a release, which keeps the group; see
+// clearedReleaseAffinityMetadata. See that function too for why cmd/gc clears
+// by empty value rather than key deletion.
 func clearSessionAffinityMetadataOnBead(store beads.Store, beadID string) error {
 	for _, key := range beadmeta.SessionAffinityMetadataKeys {
 		if err := store.SetMetadata(beadID, key, ""); err != nil {

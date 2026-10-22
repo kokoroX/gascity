@@ -5464,8 +5464,8 @@ func TestCloseBeadClearsSessionAffinityOnRelease(t *testing.T) {
 	if got := strings.TrimSpace(gotWork.Metadata["gc.session_affinity"]); got != "" {
 		t.Errorf("gc.session_affinity = %q, want cleared after closed-session release", got)
 	}
-	if got := strings.TrimSpace(gotWork.Metadata["gc.continuation_group"]); got != "" {
-		t.Errorf("gc.continuation_group = %q, want cleared after closed-session release", got)
+	if got := strings.TrimSpace(gotWork.Metadata["gc.continuation_group"]); got != "main" {
+		t.Errorf("gc.continuation_group = %q, want main preserved across the release", got)
 	}
 	if gotWork.Metadata["gc.routed_to"] != "worker" {
 		t.Errorf("gc.routed_to = %q, want preserved as worker for pool redispatch", gotWork.Metadata["gc.routed_to"])
@@ -9172,10 +9172,10 @@ func TestUnclaimWorkAssignedToRetiredSessionBeadClearsSessionAffinity(t *testing
 
 	// In-progress work pinned to the retired session via continuation-group
 	// affinity, with no existing route so the fallback run_target applies. The
-	// detach must clear both affinity keys (or the next claim re-vacuums the
-	// reopened bead onto the dead session's group) while still seeding the
-	// fallback route: the affinity clears and the route merge must not clobber
-	// each other.
+	// detach must clear the session pin (gc.session_affinity) while keeping
+	// gc.continuation_group, which belongs to the workflow segment rather than
+	// the dead session, so the next session to claim a step preassigns the rest.
+	// The clears and the route merge must not clobber each other.
 	work, err := store.Create(beads.Bead{
 		Title:    "scoped step",
 		Status:   "in_progress",
@@ -9209,8 +9209,8 @@ func TestUnclaimWorkAssignedToRetiredSessionBeadClearsSessionAffinity(t *testing
 	if v := strings.TrimSpace(got.Metadata["gc.session_affinity"]); v != "" {
 		t.Errorf("gc.session_affinity = %q, want cleared after retired-session unclaim", v)
 	}
-	if v := strings.TrimSpace(got.Metadata["gc.continuation_group"]); v != "" {
-		t.Errorf("gc.continuation_group = %q, want cleared after retired-session unclaim", v)
+	if v := strings.TrimSpace(got.Metadata["gc.continuation_group"]); v != "main" {
+		t.Errorf("gc.continuation_group = %q, want main preserved after retired-session unclaim", v)
 	}
 	if got.Metadata["gc.run_target"] != "fallback/worker" {
 		t.Errorf("gc.run_target = %q, want fallback/worker applied alongside the affinity clear", got.Metadata["gc.run_target"])

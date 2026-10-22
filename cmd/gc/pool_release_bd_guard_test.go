@@ -190,10 +190,13 @@ func TestReleaseOrphanedPoolAssignment_BdStoreGuardedRelease(t *testing.T) {
 			if got.Status != "open" || got.Assignee != "" {
 				t.Fatalf("row = status %q assignee %q, want open and unassigned", got.Status, got.Assignee)
 			}
-			for key, want := range clearedSessionAffinityMetadata() {
+			for key, want := range clearedReleaseAffinityMetadata() {
 				if got.Metadata[key] != want {
 					t.Errorf("metadata[%q] = %q, want it cleared in the same write", key, got.Metadata[key])
 				}
+			}
+			if want := tc.extra[beadmeta.ContinuationGroupMetadataKey]; want != "" && got.Metadata[beadmeta.ContinuationGroupMetadataKey] != want {
+				t.Errorf("gc.continuation_group = %q, want %q preserved across the release", got.Metadata[beadmeta.ContinuationGroupMetadataKey], want)
 			}
 		})
 	}

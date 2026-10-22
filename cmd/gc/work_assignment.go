@@ -190,7 +190,7 @@ func (w workAssignment) ReleaseWorkBead(item beads.Bead, runTargetFallback strin
 	if store == nil {
 		return nil
 	}
-	metadata := clearedSessionAffinityMetadata()
+	metadata := clearedReleaseAffinityMetadata()
 	stampFallbackRoute := runTargetFallback != "" &&
 		strings.TrimSpace(item.Metadata[beadmeta.RunTargetMetadataKey]) == "" &&
 		strings.TrimSpace(item.Metadata[beadmeta.RoutedToMetadataKey]) == ""
@@ -216,11 +216,14 @@ func (w workAssignment) ReleaseWorkBead(item beads.Bead, runTargetFallback strin
 	//     routed_to, leaving it invisible to the controller demand query and to
 	//     the orphan sweep (which scans only assigned work). If the second write
 	//     then fails, nothing revisits the bead and it is stranded silently.
-	//   - an active continuation group: gc.continuation_group is still set, and a
+	//   - an active continuation group: gc.continuation_group is preserved across
+	//     the release (it names the workflow segment, not the session), so a
 	//     concurrent `gc hook --claim` reads it to vacuum this bead and its
-	//     {root, group} siblings onto the claiming session. This is the same
-	//     hazard releaseOrphanedPoolAssignment bypasses tier 1 for, and it is read
-	//     from the same snapshot for the same reason: a group stamped after the
+	//     {root, group} siblings onto the claiming session. Landing status,
+	//     assignee and the affinity clear as one write leaves no partially
+	//     released row for such a claim to observe. This is the same reason
+	//     releaseOrphanedPoolAssignment bypasses tier 1 for these beads, and the
+	//     group is read from the same snapshot: a group stamped after the
 	//     caller's List but before this write still takes tier 1. Narrowing that
 	//     would need a live metadata re-read on every release, and it is the
 	//     assignee — not the group — that tier 1 verifies atomically.
@@ -253,7 +256,8 @@ func (w workAssignment) ReleaseWorkBead(item beads.Bead, runTargetFallback strin
 			// advisory SessionAffinityMetadataKey. The exception is the same
 			// snapshot-bound gap singleWriteRequired documents: a group stamped
 			// after the caller's List still reaches this second write, and if
-			// this write fails that group outlives the release.
+			// this write fails that group is left in place — which is now the
+			// release's normal outcome anyway.
 			if err := store.Update(item.ID, beads.UpdateOpts{Metadata: metadata}); err != nil {
 				return fmt.Errorf("clearing session affinity on %q after conditional release: %w", item.ID, err)
 			}

@@ -39,6 +39,113 @@ func TestReleasePoliciesTable(t *testing.T) {
 	}
 }
 
+func TestReleaseClaimsPreservesContinuationGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		why  releaseWhy
+	}{
+		{"killed-seat", releaseKilledSeat},
+		{"drain-ack", releaseDrainAck},
+		{"close-cascade", releaseCloseCascade},
+		{"stranded-repair", releaseStrandedRepair},
+		{"orphan", releaseOrphan},
+		{"retired", releaseRetired},
+		{"ladder", releaseLadder},
+	} {
+		why := tc.why
+		t.Run(tc.name, func(t *testing.T) {
+			store := fencedMemStore(t)
+			status := "in_progress"
+			if why == releaseKilledSeat {
+				status = "open"
+			}
+			work := createWork(t, store, status, "old-session", map[string]string{
+				beadmeta.RoutedToMetadataKey:          "worker",
+				beadmeta.RootBeadIDMetadataKey:        "root-1",
+				beadmeta.ContinuationGroupMetadataKey: "body",
+				beadmeta.SessionAffinityMetadataKey:   "require",
+			})
+			out := releaseListed([]seatWorkHit{{store: store, bead: work}}, why, releaseSeat{id: "old-session"}, servingCity("worker"), ReleaseOpts{})
+			if len(out.Released) != 1 || len(out.Failed) != 0 {
+				t.Fatalf("release outcome = %+v, want one released claim", out)
+			}
+			got, err := store.Get(work.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "open" || got.Assignee != "" || got.Metadata[beadmeta.SessionAffinityMetadataKey] != "" {
+				t.Errorf("released claim = %+v, want open with no assignee or session affinity", got)
+			}
+			if got.Metadata[beadmeta.ContinuationGroupMetadataKey] != "body" || got.Metadata[beadmeta.RootBeadIDMetadataKey] != "root-1" {
+				t.Errorf("released workflow position = %v, want root-1/body preserved", got.Metadata)
+			}
+		})
+	}
+}
+
+func TestPreassignHookContinuationGroupAfterRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		why  releaseWhy
+	}{
+		{"close-cascade", releaseCloseCascade},
+		{"drain-ack", releaseDrainAck},
+		{"orphan", releaseOrphan},
+	} {
+		why := tc.why
+		t.Run(tc.name, func(t *testing.T) {
+			store := fencedMemStore(t)
+			var steps []beads.Bead
+			for range 3 {
+				steps = append(steps, createWork(t, store, "in_progress", "old-session", map[string]string{
+					beadmeta.RoutedToMetadataKey:          "worker",
+					beadmeta.RootBeadIDMetadataKey:        "root-1",
+					beadmeta.ContinuationGroupMetadataKey: "body",
+					beadmeta.SessionAffinityMetadataKey:   "require",
+				}))
+			}
+			otherRoot := createWork(t, store, "open", "", map[string]string{beadmeta.RoutedToMetadataKey: "worker", beadmeta.RootBeadIDMetadataKey: "root-2", beadmeta.ContinuationGroupMetadataKey: "body"})
+			otherGroup := createWork(t, store, "open", "", map[string]string{beadmeta.RoutedToMetadataKey: "worker", beadmeta.RootBeadIDMetadataKey: "root-1", beadmeta.ContinuationGroupMetadataKey: "other"})
+			seat := beads.Bead{ID: "old-session"}
+			scope := releaseScopeOwn(seat)
+			out, err := ReleaseClaims(testSeatWork("", servingCity("worker"), store, nil), scope, releaseSeatOfBead(seat), why, ReleaseOpts{})
+			if err != nil || len(out.Released) != 3 {
+				t.Fatalf("ReleaseClaims = %+v, %v, want three released claims", out, err)
+			}
+			if err := store.Update(steps[0].ID, beads.UpdateOpts{Status: stringPtr("in_progress"), Assignee: stringPtr("new-session")}); err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := store.Get(steps[0].ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ops := hookClaimOps{
+				ListContinuation: func(_ context.Context, _ string, _ []string, rootID, group string) ([]beads.Bead, error) {
+					return store.List(beads.ListQuery{Status: "open", Metadata: map[string]string{beadmeta.RootBeadIDMetadataKey: rootID, beadmeta.ContinuationGroupMetadataKey: group}})
+				},
+				AssignContinuation: func(_ context.Context, _ string, _ []string, id, assignee string) error {
+					return store.Update(id, beads.UpdateOpts{Assignee: &assignee})
+				},
+			}
+			assigned, err := preassignHookContinuationGroup(claimed, hookClaimOptions{Assignee: "new-runtime", SessionID: "new-session", RouteTargets: []string{"worker"}}, ops, ".")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{steps[1].ID, steps[2].ID}
+			slices.Sort(assigned)
+			slices.Sort(want)
+			if !reflect.DeepEqual(assigned, want) {
+				t.Fatalf("preassigned = %v, want %v", assigned, want)
+			}
+			for _, step := range steps {
+				assertAssignee(t, store, step.ID, "new-session")
+			}
+			assertAssignee(t, store, otherRoot.ID, "")
+			assertAssignee(t, store, otherGroup.ID, "")
+		})
+	}
+}
+
 // strandCase is one row of NEW-5's strand table (mc-zndi7.87): a claim no
 // lane would serve once released, except "served", the control.
 type strandCase struct {
