@@ -65,9 +65,18 @@ On macOS arm64 that means:
   `/opt/homebrew/opt/icu4c` to the darwin compile and link flags, as the
   Makefile does for the Go-native targets.
 - Tests that exec host tools need them where the pinned test `PATH`
-  (`/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin`) finds them: Go at
-  `/usr/local/go` (the symlink above), `flock` (`brew install flock`), and a
-  `python3` with `tomllib` (3.11+) ahead of macOS's `/usr/bin/python3` 3.9.
+  (`/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin`) finds them, which is
+  neither Homebrew's `/opt/homebrew/bin` nor a version manager's shims: Go at
+  `/usr/local/go` (the symlink above), `flock`, and a `python3` with
+  `tomllib` (3.11+) ahead of macOS's `/usr/bin/python3` 3.9. Install them
+  however you like, then link the real binaries in (not shims: tests run
+  with a temporary `HOME`), for example:
+
+  ```bash
+  brew install flock
+  sudo ln -s /opt/homebrew/bin/flock /usr/local/bin/flock
+  sudo ln -s "$(mise where python)/bin/python3" /usr/local/bin/python3
+  ```
 - Targets that run a pinned Linux x86_64 tool binary (`//:goreleaser_check_test`)
   are incompatible with macOS and skipped; the Linux unit lane gates them.
 
