@@ -67,18 +67,27 @@ On macOS arm64 that means:
 - Tests that exec host tools need them where the pinned test `PATH`
   (`/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin`) finds them, which is
   neither Homebrew's `/opt/homebrew/bin` nor a version manager's shims: Go at
-  `/usr/local/go` (the symlink above), `flock`, and a `python3` with
-  `tomllib` (3.11+) ahead of macOS's `/usr/bin/python3` 3.9. Install them
-  however you like, then link the real binaries in (not shims: tests run
-  with a temporary `HOME`), for example:
+  `/usr/local/go` (the symlink above), `flock`, `tmux`, `lsof` (macOS ships
+  it in `/usr/sbin`, also off the pinned `PATH`; tmux and Dolt process
+  inspection use it), and a `python3` with `tomllib` (3.11+) ahead of
+  macOS's `/usr/bin/python3` 3.9. Install them however you like, then link
+  the real binaries in (not shims: tests run with a temporary `HOME`), for
+  example:
 
   ```bash
-  brew install flock
+  brew install flock tmux
   sudo ln -s /opt/homebrew/bin/flock /usr/local/bin/flock
+  sudo ln -s /opt/homebrew/bin/tmux /usr/local/bin/tmux
+  sudo ln -s /usr/sbin/lsof /usr/local/bin/lsof
   sudo ln -s "$(mise where python)/bin/python3" /usr/local/bin/python3
   ```
-- Targets that run a pinned Linux x86_64 tool binary (`//:goreleaser_check_test`)
-  are incompatible with macOS and skipped; the Linux unit lane gates them.
+- Tests that fetch Go modules need a reachable proxy. Where
+  `proxy.golang.org` is blocked, set `GOPROXY` in the Go installation's
+  `$GOROOT/go.env`; `go env -w` writes under `HOME`, which tests replace.
+- Targets that run a pinned Linux x86_64 tool binary
+  (`//:goreleaser_check_test`, the dashboard's
+  `//internal/api/dashboardspa/web/frontend:playwright_test`) are
+  incompatible with macOS and skipped; the Linux unit lane gates them.
 
 A macOS run is a local signal only: CI (`bazel.yml`) gates on Linux x86_64.
 
