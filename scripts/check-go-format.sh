@@ -21,10 +21,11 @@ jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 files="$(mktemp)"
 trap 'rm -f "$files"' EXIT
 # grep -L lists the files WITHOUT the generated-code marker (exit 1 when
-# every file has one, which the emptiness check below reports).
+# every file has one, which the emptiness check below reports). --null, not
+# -Z: BSD grep's (macOS) -Z decompresses instead of NUL-terminating names.
 find -L . \( -type d \( -name testdata -o -name vendor -o -name '.?*' -o -name '_*' \) -prune \) \
 	-o \( -type f -name '*.go' -print0 \) |
-	xargs -0 grep -LZE '^// Code generated .* DO NOT EDIT\.$' >"$files" || true
+	xargs -0 grep -L --null -E '^// Code generated .* DO NOT EDIT\.$' >"$files" || true
 
 if [ ! -s "$files" ]; then
 	echo "check-go-format: no Go files found under $(pwd); inputs are not wired" >&2

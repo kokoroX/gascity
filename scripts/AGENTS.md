@@ -62,3 +62,14 @@ hooks; it derives the soname list from a single ICU-major constant, and
 `TestBazelLocalRuntimePinMatchesProbe` fails when that constant, the
 `MODULE.bazel` pin and `engdocs/bazel-quickstart.md` disagree. Only `auto`
 probes: an explicit mode is never replaced.
+
+## Shell guards walk files with `find -L`, never `grep -R`
+
+Under `bazel test` an `sh_test` reads its sources from the runfiles tree,
+where every file is a symlink. GNU grep's `-R` follows them; BSD grep's
+(macOS `/usr/bin/grep`, which the pinned test `PATH` resolves) skips them, so
+a `grep -R` scan matches nothing on macOS and the guard passes without
+checking anything. Linux CI cannot catch that. List files with
+`find -L <paths> -type f -print0 | xargs -0 grep -H ...` instead, as
+`check-eventexport-isolation.sh` (`grep_surface`) and
+`check-core-boundary.sh` check (f) do.

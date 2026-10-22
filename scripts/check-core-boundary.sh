@@ -196,7 +196,9 @@ COMMERCIAL_FIELD_RE='json:"[^"]*(trial|billing|credit|plan|invoice|subscription|
 commercial_fields=""
 for p in $COMMERCIAL_SURFACE; do
 	[ -e "$p" ] || continue
-	hits=$(grep -RnE --include='*.go' "$COMMERCIAL_FIELD_RE" "$p" 2>/dev/null \
+	# find -L, not grep -R: Bazel runfiles are symlinks, which BSD grep -R
+	# (macOS) skips.
+	hits=$(find -L "$p" -type f -name '*.go' -print0 | xargs -0 grep -HnE "$COMMERCIAL_FIELD_RE" 2>/dev/null \
 		| grep -v '_test\.go:' | grep -v 'boundary:allow commercial')
 	if [ -n "$hits" ]; then
 		commercial_fields="${commercial_fields}${hits}"$'\n'

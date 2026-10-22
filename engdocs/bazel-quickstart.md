@@ -54,6 +54,25 @@ release of the same LLVM version, also pinned by sha256, but without a
 sysroot: cgo uses the host's C headers and libraries (ICU included), and
 their action keys do not match CI's.
 
+On macOS arm64 that means:
+
+- Links use the host's own `ld` (`xcrun --find ld`), not the distribution's
+  `ld64.lld`. The links read the host SDK's `.tbd` stubs, and an SDK newer
+  than the pinned LLVM fails to parse in lld (macOS 27's `arm64e.x1`
+  architecture token breaks LLVM 22's lld). The host linker always matches
+  its own SDK.
+- ICU comes from Homebrew: `brew install icu4c`. `MODULE.bazel` adds
+  `/opt/homebrew/opt/icu4c` to the darwin compile and link flags, as the
+  Makefile does for the Go-native targets.
+- Tests that exec host tools need them where the pinned test `PATH`
+  (`/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin`) finds them: Go at
+  `/usr/local/go` (the symlink above), `flock` (`brew install flock`), and a
+  `python3` with `tomllib` (3.11+) ahead of macOS's `/usr/bin/python3` 3.9.
+- Targets that run a pinned Linux x86_64 tool binary (`//:goreleaser_check_test`)
+  are incompatible with macOS and skipped; the Linux unit lane gates them.
+
+A macOS run is a local signal only: CI (`bazel.yml`) gates on Linux x86_64.
+
 ### 2. Choose where actions run
 
 Bazel decides where to run from the rc files; the committed `.bazelrc` has
