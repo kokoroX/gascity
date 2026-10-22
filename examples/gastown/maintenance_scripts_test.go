@@ -7273,6 +7273,9 @@ const maintenanceBdAppliedIDsJSON = `    if [ -n "${BD_CLOSE_FAIL:-}" ]; then
 //     store-content fixtures read the exact queries the scripts send through bd;
 //   - serves `export --all -o FILE` from the same store, converting the
 //     stub's issues rows into bd export JSONL (one record per line);
+//   - answers `config list --json` with the scope's store configuration
+//     (FAKE_STORE_CONFIG_JSON, default a store whose only setting is its
+//     issue_prefix);
 //   - refuses scopes listed in FAKE_NOT_BD_SCOPES the way gc refuses a
 //     non-bd beads provider;
 //   - fails for scopes listed in FAKE_UNREACHABLE_SCOPES or in the
@@ -7396,6 +7399,16 @@ if [ "${1:-}" = "bd" ]; then
         printf '%s\n' "$fake_payload" > "$fake_out"
       fi
       exit 0
+      ;;
+    config)
+      if [ "${2:-}" = list ]; then
+        fake_config='{"issue_prefix":"gc"}'
+        if [ -n "${FAKE_STORE_CONFIG_JSON:-}" ]; then
+          fake_config="$FAKE_STORE_CONFIG_JSON"
+        fi
+        printf '%s\n' "$fake_config"
+        exit 0
+      fi
       ;;
   esac
   exec bd "$@"

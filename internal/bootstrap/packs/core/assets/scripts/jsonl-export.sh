@@ -7,8 +7,21 @@
 # add/commit/push. No LLM judgment needed.
 #
 # The archive holds bd's native export format, one issue per line with its
-# labels, dependencies and comments embedded, so a snapshot restores with
-# `gc bd import <file>`.
+# labels, dependencies and comments embedded, plus the scope's own store
+# configuration in <db>/config.json. A restore replays that configuration
+# before importing, because the export carries no store settings of its own
+# and bd refuses a bead whose type the fresh store does not know
+# ("invalid issue type: convoy"):
+#
+#   jq -r 'to_entries[] | select(.key != "schema_version" and .key != "issue_prefix")
+#          | "\(.key)\t\(.value)"' <db>/config.json |
+#       while IFS="$(printf '\t')" read -r key value; do
+#           gc bd --rig <rig> config set "$key" "$value"
+#       done
+#   gc bd --rig <rig> import <db>/issues.jsonl
+#
+# RESTORE.md at the archive root carries the same recipe for whoever reaches
+# the archive without this script.
 #
 # Runs as an exec order (no LLM, no agent, no wisp).
 set -euo pipefail
@@ -49,6 +62,14 @@ PUSH_RETRY_DELAY_MIN="${GC_JSONL_PUSH_RETRY_DELAY_MIN:-1}"
 PUSH_RETRY_DELAY_SPAN="${GC_JSONL_PUSH_RETRY_DELAY_SPAN:-4}"
 SCRUB="${GC_JSONL_SCRUB:-true}"
 ARCHIVE_REPO="${GC_JSONL_ARCHIVE_REPO:-$PACK_STATE_DIR/jsonl-archive}"
+# Suspended rigs this archive still covers: a space- or comma-separated list
+# of rig names, or "all". Empty by default, which keeps every suspended rig
+# out — reading a bd-managed scope restarts the retired proxy and Dolt the
+# suspension stopped. Name a rig here when reading its store wakes nothing,
+# as with a store on an external server: its beads then keep reaching the
+# archive while the city is idle or stopped, which is when nothing else is
+# backing them up. Rigs left out are reported as skipped scopes.
+SUSPENDED_RIGS="${GC_JSONL_SUSPENDED_RIGS:-}"
 # Re-log the archive mode at least this often (seconds) even without a mode
 # transition, so operators who missed the first line still see the current
 # configuration. Default one week.
@@ -970,6 +991,66 @@ move_legacy_snapshot_files() {
     fi
 }
 
+# write_restore_recipe refreshes RESTORE.md at the archive root. Whoever
+# reaches for this archive has the archive and nothing else, so the one
+# ordering that is not obvious from the files — store configuration before
+# import — is written down beside them.
+write_restore_recipe() {
+    cat >"$ARCHIVE_REPO/RESTORE.md" <<'RECIPE'
+# Restoring a scope from this archive
+
+Each `<db>/` directory is one bead scope: `issues.jsonl` is `gc bd export
+--all` (one record per line, labels, dependencies and comments embedded,
+memories as `"_type":"memory"` records) and `config.json` is that store's own
+configuration. `<db>.jsonl` is a copy of `issues.jsonl` for readers of the
+older flat layout.
+
+Create the scope first (`gc rig add` for a rig, whose `--prefix` is the
+`issue_prefix` in `config.json`), then replay the configuration before
+importing. Below, `gc bd --rig <rig>` addresses a rig; the city scope is plain
+`gc bd` with no `--rig`. Without a city, the standalone bd binary restores
+the same way: run its `init -p <issue_prefix>` in an empty directory, then use
+it in place of `gc bd --rig <rig>` below. The export carries no store settings, and bd refuses a bead whose
+type a fresh store does not know (`invalid issue type: convoy`), so an import
+into a default store stops on the first custom-typed bead.
+
+```sh
+jq -r 'to_entries[]
+       | select(.key != "schema_version" and .key != "issue_prefix")
+       | "\(.key)\t\(.value)"' <db>/config.json |
+    while IFS="$(printf '\t')" read -r key value; do
+        gc bd --rig <rig> config set "$key" "$value"
+    done
+gc bd --rig <rig> import <db>/issues.jsonl
+```
+
+bd warns on the keys it owns itself ("not a recognized config key"); those
+already hold the value the snapshot recorded, so the warning is expected and
+the replay still leaves every key as `config.json` has it.
+
+Then check the restore against the snapshot. By default the list verb hides
+gates, infra, templates and ephemeral beads and stops at 50 results, and
+`memories --json` carries a `schema_version` key beside the memories, so the
+checks spell out every flag:
+
+```sh
+gc bd --rig <rig> list --all --include-gates --include-infra \
+    --include-templates --include-ephemeral -n 0 --json | jq length
+grep -c '"_type":"issue"' <db>/issues.jsonl
+
+gc bd --rig <rig> memories --json | jq 'del(.schema_version) | length'
+grep -c '"_type":"memory"' <db>/issues.jsonl
+```
+
+## What this archive does not hold
+
+- Dolt history. These snapshots are the working state at export time; there
+  are no Dolt commits, branches or `dolt_log` behind them.
+- A scope whose rig was suspended and not named in `GC_JSONL_SUSPENDED_RIGS`.
+  Each export's order outcome names the scopes it skipped.
+RECIPE
+}
+
 # Ensure archive repo exists.
 if [ ! -d "$ARCHIVE_REPO/.git" ]; then
     mkdir -p "$ARCHIVE_REPO"
@@ -1059,6 +1140,7 @@ export_scope() {
     local raw_tmp
     local out
     local filtered_tmp
+    local config_tmp
 
     if ! move_legacy_snapshot_files "$DB"; then
         echo "jsonl-export: moving the legacy snapshot of $DB to $DB/legacy/ failed" >&2
@@ -1088,6 +1170,31 @@ export_scope() {
     rm -f "$raw_tmp"
     mv -f "$filtered_tmp" "$db_dir/issues.jsonl"
 
+    # Step 2b: the store's own configuration. The export carries issues and
+    # memories but no store settings, and a restore into a fresh store fails
+    # on the first bead of a custom type until types.custom is set again, so
+    # the archive is only restorable with this file beside the issues.
+    config_tmp=$(mktemp "$db_dir/config.json.tmp.XXXXXX")
+    if ! out=$(scope_bd config list --json 2>&1 >"$config_tmp"); then
+        echo "jsonl-export: gc bd config list failed for $SCOPE_LABEL ($DB): $out" >&2
+        rm -f "$config_tmp"
+        discard_failed_db_outputs "$DB"
+        return 1
+    fi
+    if ! jq -e 'type == "object"' <"$config_tmp" >/dev/null 2>&1; then
+        echo "jsonl-export: gc bd config list for $SCOPE_LABEL ($DB) is not a JSON object" >&2
+        rm -f "$config_tmp"
+        discard_failed_db_outputs "$DB"
+        return 1
+    fi
+    if ! jq -S . <"$config_tmp" >"$config_tmp.sorted"; then
+        rm -f "$config_tmp" "$config_tmp.sorted"
+        discard_failed_db_outputs "$DB"
+        return 1
+    fi
+    rm -f "$config_tmp"
+    mv -f "$config_tmp.sorted" "$db_dir/config.json"
+
     # The flat <db>.jsonl mirrors the per-db snapshot for readers of the
     # older flat layout.
     if ! cp -f "$db_dir/issues.jsonl" "$ARCHIVE_REPO/$DB.jsonl" 2>/dev/null; then
@@ -1095,6 +1202,21 @@ export_scope() {
         return 1
     fi
     return 0
+}
+
+# suspended_rig_is_covered reports whether SUSPENDED_RIGS names this rig.
+suspended_rig_is_covered() {
+    local rig_name="$1"
+    local listed
+
+    case "$SUSPENDED_RIGS" in
+        '') return 1 ;;
+        all | ALL) return 0 ;;
+    esac
+    for listed in $(printf '%s' "$SUSPENDED_RIGS" | tr ',' ' '); do
+        [ "$listed" = "$rig_name" ] && return 0
+    done
+    return 1
 }
 
 # Every scope is visited through bd: the city first, then each rig.
@@ -1105,6 +1227,18 @@ if RIG_NAMES=$(core_rig_names); then
         SCOPE_SPECS="$SCOPE_SPECS
 rig $rig_name"
     done <<< "$RIG_NAMES"
+    # A suspended rig is visited only when SUSPENDED_RIGS names it; the rest
+    # are declared, so a narrowed archive is never mistaken for a quiet one.
+    while IFS= read -r rig_name; do
+        [ -n "$rig_name" ] || continue
+        if suspended_rig_is_covered "$rig_name"; then
+            SCOPE_SPECS="$SCOPE_SPECS
+rig $rig_name"
+            continue
+        fi
+        echo "jsonl-export: rig:$rig_name is suspended and not named in GC_JSONL_SUSPENDED_RIGS; its store is not archived this run"
+        order_outcome_scope_skipped "rig:$rig_name" "rig suspended"
+    done <<< "$(core_suspended_rig_names)"
 else
     echo "jsonl-export: gc rig list failed; exporting the city scope only" >&2
     order_outcome_scope_skipped "rigs" "rig list unavailable"
@@ -1191,6 +1325,13 @@ elif [ "$FAILED_DB_COUNT" -ge "$TOTAL_DBS" ]; then
     order_outcome_set skipped "no bead scope could be exported"
 fi
 
+# The recipe rides along with a snapshot, never on its own: a run whose
+# every scope failed stages nothing and must leave the archive where it was.
+if [ "${#STAGE_PATHS[@]}" -gt 0 ]; then
+    write_restore_recipe
+    STAGE_PATHS+=("RESTORE.md")
+fi
+
 cd "$ARCHIVE_REPO"
 if [ "${#STAGE_PATHS[@]}" -gt 0 ]; then
     if ! git add -A -- "${STAGE_PATHS[@]}"; then
@@ -1255,8 +1396,12 @@ if git diff --cached --quiet 2>/dev/null; then
         echo "jsonl-export: $SUMMARY"
         exit 0
     fi
-    # No changes.
-    maintenance_done "jsonl — no changes"
+    # No changes, and nothing waiting to be pushed. Said out loud so an
+    # operator can tell this apart from an export that reached fewer scopes
+    # than they expected and therefore found nothing to write.
+    SUMMARY="jsonl — no changes, exported $((TOTAL_DBS - FAILED_DB_COUNT))/$TOTAL_DBS, records: $TOTAL_EXPORTED"
+    maintenance_done "$SUMMARY"
+    echo "jsonl-export: $SUMMARY"
     exit 0
 fi
 
