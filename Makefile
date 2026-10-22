@@ -194,6 +194,17 @@ install: check-self-contained
 generate:
 	go run ./cmd/genschema
 
+## precommit-codegen: the generated artifacts .githooks/pre-commit stages:
+## the OpenAPI spec and schema mirrors, the generated Go API client, and the
+## config/CLI reference docs. A make target, not three bare `go run`s in the
+## hook, so the CGO flags above (macOS icu4c, Nix ICU, the Linux system
+## fallback) reach the Dolt-dependent builds; `go run ./cmd/genspec` without
+## them fails on a macOS host with 'unicode/regex.h' file not found.
+precommit-codegen: install-oapi-codegen
+	go run ./cmd/genspec
+	go generate ./internal/api/genclient
+	go run ./cmd/genschema
+
 ## check-schema: verify generated docs are up to date
 check-schema: generate
 	@git diff --exit-code docs/reference/ || \
