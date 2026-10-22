@@ -16,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/executionevent"
 	"github.com/gastownhall/gascity/internal/formula"
@@ -961,7 +962,12 @@ func ClonePriorityPtr(v *int) *int {
 }
 
 // BeadMetadataTarget walks the bead's parent chain looking for a "target"
-// metadata value (used for branch targeting).
+// metadata value (used for branch targeting). At each hop the bead's own
+// target wins (for the starting bead or a convoy ancestor), then the target
+// of the convoys that track that bead through a tracks edge, so a card added
+// with `gc convoy create/add` inherits the convoy's `--target`. When the
+// tracking convoys name different targets the walk stops with no target: the
+// bead has to name its own.
 func BeadMetadataTarget(store beads.Store, beadID string) string {
 	if store == nil || beadID == "" {
 		return ""
@@ -984,9 +990,33 @@ func BeadMetadataTarget(store beads.Store, beadID string) string {
 				return target
 			}
 		}
+		if target, ambiguous := trackingConvoyTarget(store, beadID); target != "" || ambiguous {
+			return target
+		}
 		beadID = strings.TrimSpace(b.ParentID)
 	}
 	return ""
+}
+
+// trackingConvoyTarget returns the target shared by the convoys that track
+// beadID. ambiguous reports that those convoys name more than one target, in
+// which case target is empty.
+func trackingConvoyTarget(store beads.Store, beadID string) (target string, ambiguous bool) {
+	convoys, err := convoycore.TrackingConvoysForItem(store, beadID)
+	if err != nil {
+		return "", false
+	}
+	for _, cv := range convoys {
+		t := strings.TrimSpace(cv.Metadata["target"])
+		switch {
+		case t == "" || t == target:
+		case target == "":
+			target = t
+		default:
+			return "", true
+		}
+	}
+	return target, false
 }
 
 // SlingFormulaSearchPaths returns the formula search paths for the current
