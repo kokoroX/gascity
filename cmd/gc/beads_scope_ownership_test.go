@@ -1020,6 +1020,75 @@ func TestProviderOwnedFreshRigInheritsReadyExternalBinding(t *testing.T) {
 	}
 }
 
+func TestProviderOwnedDirectExternalInitPreservesProjectedPassword(t *testing.T) {
+	for _, source := range []string{"process", "scope file", "credentials file", "unprojected inherited"} {
+		t.Run(source, func(t *testing.T) {
+			clearGCEnv(t)
+			city := t.TempDir()
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("GC_DOLT_PASSWORD", "")
+			t.Setenv("BEADS_DOLT_PASSWORD", "fake-inherited-beads-password")
+			t.Setenv("UNRELATED_PASSWORD", "fake-unrelated-password")
+			credentials := filepath.Join(city, "credentials")
+			if err := os.WriteFile(credentials, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("BEADS_CREDENTIALS_FILE", credentials)
+			stubAmbientNativeDoltOpenEnv(t, map[string]string{"BEADS_CREDENTIALS_FILE": credentials})
+
+			const password = "fake-projected-dolt-password"
+			wantPassword := password
+			switch source {
+			case "process":
+				t.Setenv("GC_DOLT_PASSWORD", password)
+			case "scope file":
+				if err := os.MkdirAll(filepath.Join(city, ".beads"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(city, ".beads", ".env"), []byte("BEADS_DOLT_PASSWORD="+password+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "credentials file":
+				if err := os.WriteFile(credentials, []byte("[db.example.invalid:4406]\npassword = "+password+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "unprojected inherited":
+				wantPassword = ""
+			}
+
+			key := normalizePathForCompare(city)
+			selectorExternalInitOptions.Store(key, hostedDoltInitOptions{
+				Target: "external", Host: "db.example.invalid", Port: "4406", User: "fake-selector-user", Database: "fake_database",
+			})
+			t.Cleanup(func() { selectorExternalInitOptions.Delete(key) })
+			logPath := filepath.Join(city, "provider-env")
+			script := filepath.Join(city, "gc-beads-bd.sh")
+			contents := "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"${GC_DOLT_PASSWORD:-}\" \"${BEADS_DOLT_PASSWORD:-}\" \"${BEADS_DOLT_SERVER_USER:-}\" \"${UNRELATED_PASSWORD:-}\" > \"$GC_TEST_PROVIDER_LOG\"\n"
+			if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GC_TEST_PROVIDER_LOG", logPath)
+			if err := os.WriteFile(filepath.Join(city, "city.toml"), []byte("[workspace]\nname = \"password-env\"\n[beads]\nprovider = \"exec:"+script+"\"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := persistProviderScopeOwnership(city, city, providerScopeIntent{Transport: "direct", Target: "external"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runProviderOwnedScopeInit(city, city, "test", script); err != nil {
+				t.Fatalf("runProviderOwnedScopeInit: %v", err)
+			}
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := wantPassword + "|" + wantPassword + "|fake-selector-user|\n"
+			if string(data) != want {
+				t.Fatalf("provider script environment = %q, want %q", data, want)
+			}
+		})
+	}
+}
+
 func TestProviderOwnedReadyScopeReopensWithoutInitializationIntent(t *testing.T) {
 	city := t.TempDir()
 	logPath := filepath.Join(city, "provider-ops")

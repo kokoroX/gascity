@@ -2293,6 +2293,30 @@ dolt.user: canonical-user
 	}
 }
 
+func TestRuntimeEnvFiltersUnprojectedInheritedPasswords(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin",
+		"GC_DOLT_PASSWORD=fake-inherited-gc-password",
+		"BEADS_DOLT_PASSWORD=fake-inherited-beads-password",
+		"UNRELATED_PASSWORD=fake-inherited-unrelated-password",
+	}
+	for name, merge := range map[string]func([]string, map[string]string) []string{
+		"merge": mergeRuntimeEnv, "overlay": overlayEnvEntries,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := runtimeEnvEntriesToMap(merge(parent, map[string]string{"BEADS_DIR": "/fake/.beads"}))
+			for _, key := range []string{"GC_DOLT_PASSWORD", "BEADS_DOLT_PASSWORD", "UNRELATED_PASSWORD"} {
+				if _, ok := got[key]; ok {
+					t.Errorf("%s survived inherited environment filtering", key)
+				}
+			}
+			if got["PATH"] != "/usr/bin" || got["BEADS_DIR"] != "/fake/.beads" {
+				t.Fatalf("non-sensitive environment = %v, want inherited PATH and explicit BEADS_DIR", got)
+			}
+		})
+	}
+}
+
 func TestMergeRuntimeEnvIncludesDoltHost(t *testing.T) {
 	parent := []string{
 		"BEADS_DOLT_SERVER_HOST=old-beads-host",

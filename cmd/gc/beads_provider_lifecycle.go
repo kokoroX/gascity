@@ -1445,15 +1445,15 @@ func runProviderOwnedScopeLifecycleOpGuarded(parent context.Context, cityPath, s
 		env = removeEnvKey(env, key)
 	}
 	if entry.State == providerScopeInitializing {
-		env = overlayEnvEntries(env, map[string]string{
+		env = overlayProviderLifecycleEnv(env, map[string]string{
 			"GC_BEADS_TRANSPORT": entry.Intent.Transport,
 			"GC_BEADS_TARGET":    entry.Intent.Target,
 		})
 		if entry.Intent.Transport == "proxied" {
-			env = overlayEnvEntries(env, map[string]string{"BEADS_DOLT_PROXIED_SERVER": "1"})
+			env = overlayProviderLifecycleEnv(env, map[string]string{"BEADS_DOLT_PROXIED_SERVER": "1"})
 		}
 	}
-	env = overlayEnvEntries(env, map[string]string{
+	env = overlayProviderLifecycleEnv(env, map[string]string{
 		"BEADS_DIR":               filepath.Join(scopeRoot, ".beads"),
 		"GC_BEADS_PROVIDER_OWNED": "1",
 	})
@@ -1606,7 +1606,7 @@ func runProviderOwnedScopeInit(cityPath, dir, prefix, script string) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		env = overlayEnvEntries(env, overrides)
+		env = overlayProviderLifecycleEnv(env, overrides)
 	}
 	if err := validatePendingProviderEndpoint(cityPath, dir, entry.Intent, env); err != nil {
 		return false, err
@@ -1619,9 +1619,9 @@ func runProviderOwnedScopeInit(cityPath, dir, prefix, script string) (bool, erro
 		overrides["GC_BEADS_TRANSPORT"] = entry.Intent.Transport
 		overrides["GC_BEADS_TARGET"] = entry.Intent.Target
 	}
-	env = overlayEnvEntries(env, overrides)
+	env = overlayProviderLifecycleEnv(env, overrides)
 	if entry.State == providerScopeInitializing && entry.Intent.Transport == "proxied" {
-		env = overlayEnvEntries(env, map[string]string{"BEADS_DOLT_PROXIED_SERVER": "1"})
+		env = overlayProviderLifecycleEnv(env, map[string]string{"BEADS_DOLT_PROXIED_SERVER": "1"})
 	}
 	args := []string{"init", dir, prefix}
 	database := ""
@@ -2040,7 +2040,7 @@ func initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase string, exe
 			if baseEnv, err = withProxiedInitIdleTimeout(baseEnv, cityPath, dir, provider); err != nil {
 				return err
 			}
-			env := overlayEnvEntries(baseEnv, map[string]string{
+			env := overlayProviderLifecycleEnv(baseEnv, map[string]string{
 				"BEADS_DIR":                 filepath.Join(dir, ".beads"),
 				"BEADS_DOLT_PROXIED_SERVER": "1",
 			})
@@ -2093,7 +2093,7 @@ func initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase string, exe
 					return err
 				}
 			}
-			env := overlayEnvEntries(baseEnv, overrides)
+			env := overlayProviderLifecycleEnv(baseEnv, overrides)
 			if err := execute(script, env, args...); err != nil {
 				if isBdAlreadyInitializedError(err) {
 					return finalizeCanonicalBdScopeInitForProvider(cityPath, dir, prefix, canonicalDoltDatabase)
@@ -3745,6 +3745,18 @@ func providerLifecycleProcessEnvForScopeInitWithError(cityPath, scopeRoot, provi
 	return env, nil
 }
 
+// overlayProviderLifecycleEnv decorates an environment already filtered and
+// explicitly projected by providerLifecycleProcessEnvWithError. Treating it as
+// inherited again would strip the credentials gc resolved for the provider.
+// Raw parent environments must use overlayEnvEntries instead.
+func overlayProviderLifecycleEnv(env []string, overrides map[string]string) []string {
+	projected := runtimeEnvEntriesToMap(env)
+	for key, value := range overrides {
+		projected[key] = value
+	}
+	return mergeRuntimeEnv(nil, projected)
+}
+
 // withProxiedInitIdleTimeout adds the idle timeout gc resolved for scopeRoot
 // to the env of a provider `init` op; the script's proxied init arms refuse to
 // run without it rather than fall back to an idle policy nobody configured.
@@ -3758,14 +3770,14 @@ func withProxiedInitIdleTimeout(env []string, cityPath, scopeRoot, provider stri
 	if err != nil {
 		return nil, err
 	}
-	return overlayEnvEntries(env, map[string]string{config.ProxiedIdleTimeoutEnv: idle.BdFlagValue()}), nil
+	return overlayProviderLifecycleEnv(env, map[string]string{config.ProxiedIdleTimeoutEnv: idle.BdFlagValue()}), nil
 }
 
 func providerLifecycleIndependentScopeInitEnv(cityPath, scopeRoot string, env []string) []string {
 	cityPath = normalizePathForCompare(cityPath)
 	overrides := map[string]string{}
 	applyLegacyRigScopeInitDoltEnv(overrides, cityPath, scopeRoot)
-	return overlayEnvEntries(env, overrides)
+	return overlayProviderLifecycleEnv(env, overrides)
 }
 
 func scopeRuntimeEnvIndependentOfCityProjection(cityPath, scopeRoot string) bool {
