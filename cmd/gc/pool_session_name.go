@@ -687,9 +687,12 @@ func isCanonicalWorkflowRoot(wb beads.Bead) bool {
 }
 
 // releaseOrphanedPoolAssignment clears wb's assignment (assignee -> "",
-// status -> open) plus the session-affinity metadata, preferring the store's
-// atomic conditional release so a legitimate re-claim landing between the
-// orphan staleness check and the release write is never clobbered.
+// status -> open) plus gc.session_affinity and the stranded stamps, keeping
+// gc.continuation_group: the group names the workflow segment the released
+// steps belong to, not the session that held them, so the next session to
+// claim one step can preassign the rest. It prefers the store's atomic
+// conditional release so a legitimate re-claim landing between the orphan
+// staleness check and the release write is never clobbered.
 //
 // Release order:
 //
@@ -711,8 +714,9 @@ func isCanonicalWorkflowRoot(wb beads.Bead) bool {
 //     affinity metadata as one write fenced on the snapshot's (status,
 //     assignee), so a claim landing after the snapshot is never clobbered.
 //     Because the one write also clears the affinity metadata, it is the
-//     correct path for continuation-group beads: the group is never exposed on
-//     an open, unassigned bead. A store that cannot fence the write is refused
+//     correct path for continuation-group beads: the group survives the release
+//     and would otherwise be exposed on an open, unassigned bead while a second
+//     write was still pending. A store that cannot fence the write is refused
 //     and logged rather than written blind.
 func releaseOrphanedPoolAssignment(store beads.Store, wb beads.Bead, clearDetached bool) bool {
 	if store == nil || strings.TrimSpace(wb.ID) == "" {
@@ -721,7 +725,7 @@ func releaseOrphanedPoolAssignment(store beads.Store, wb beads.Bead, clearDetach
 	update := beads.UpdateOpts{
 		Assignee: stringPtr(""),
 		Status:   stringPtr("open"),
-		Metadata: clearedSessionAffinityMetadata(),
+		Metadata: clearedReleaseAffinityMetadata(),
 	}
 	if clearDetached {
 		update.Metadata[detachedProbeMetadataKey] = ""
@@ -733,9 +737,11 @@ func releaseOrphanedPoolAssignment(store beads.Store, wb beads.Bead, clearDetach
 		return released
 	}
 	// On the legacy path, continuation-group beads bypass ReleaseIfCurrent: it swaps
-	// only status/assignee, so clearing the group would need a second write, and
-	// that gap would expose the routing vector on a claimable bead. The fenced
-	// fallback clears status, assignee, and affinity metadata in one write.
+	// only status/assignee, so clearing the rest of the affinity metadata would
+	// need a second write, and that gap would expose the retained routing vector
+	// on a claimable bead before the release was fully written. The fenced
+	// fallback clears status, assignee, and affinity metadata in one write while
+	// preserving the group.
 	if !beadHasActiveContinuationGroup(wb) {
 		if released, handled := releasePoolAssignmentIfCurrent(store, wb); handled {
 			if !released {
@@ -752,18 +758,16 @@ func releaseOrphanedPoolAssignment(store beads.Store, wb beads.Bead, clearDetach
 // continuation-group routing vector (gc.continuation_group). Such beads must
 // skip the two-write CAS release path: ReleaseIfCurrent swaps only
 // status/assignee, so the follow-up metadata clear rides a separate write, and
-// in that gap the bead is open and unassigned while gc.continuation_group is
-// still set. A concurrent `gc hook --claim` can then vacuum the bead (or its
-// {root, group} siblings) onto a new session via the stale group —
-// preassignHookContinuationGroup / hookListContinuationWithBdStore route on
-// gc.continuation_group + gc.root_bead_id. Routing these beads through
-// releasePoolAssignmentWithRecheck clears status, assignee, and the affinity
-// metadata in a single write, so the group is never visible on a claimable
-// bead. gc.session_affinity is an advisory marker no routing path reads (see the
-// beadmeta.SessionAffinityMetadataKeys doc), so it needs no such guard and the
-// CAS path still clears it. Lift this once bd's native conditional-release verb
-// can clear the metadata in the same guarded write (BdStore.ReleaseIfCurrent
-// SEAM).
+// the group survives the release by design. In that gap the bead is open and
+// unassigned while gc.continuation_group is still set, so a concurrent
+// `gc hook --claim` can vacuum the bead (or its {root, group} siblings) onto a
+// new session — preassignHookContinuationGroup / hookListContinuationWithBdStore
+// route on gc.continuation_group + gc.root_bead_id. Routing these beads through
+// releasePoolAssignmentWithRecheck lands status, assignee and the affinity
+// clear in a single write, so the claim sees either the old assignment or the
+// fully released segment, never a half-released row. gc.session_affinity is an
+// advisory marker no routing path reads (see the beadmeta.SessionAffinityMetadataKeys
+// doc), so it needs no such guard and the CAS path still clears it.
 func beadHasActiveContinuationGroup(wb beads.Bead) bool {
 	return strings.TrimSpace(wb.Metadata[beadmeta.ContinuationGroupMetadataKey]) != ""
 }
@@ -812,7 +816,7 @@ func releasePoolAssignmentIfCurrent(store beads.Store, wb beads.Bead) (released,
 // keys are overwritten on the next assignment, and detached-probe metadata is
 // only consulted for release candidates, which an open unassigned bead is not.
 func clearReleasedPoolAssignmentMetadata(store beads.Store, id string, clearDetached bool) {
-	metadata := clearedSessionAffinityMetadata()
+	metadata := clearedReleaseAffinityMetadata()
 	if clearDetached {
 		metadata[detachedProbeMetadataKey] = ""
 	}
@@ -827,8 +831,9 @@ func clearReleasedPoolAssignmentMetadata(store beads.Store, id string, clearDeta
 // and stores without the verb. It writes status, assignee and the affinity
 // metadata as ONE write fenced on the snapshot's (status, assignee)
 // (releaseAssignmentFenced): bd's guarded update on BdStore, otherwise an
-// UpdateIfMatch on a live re-read's revision. A claim that lands after the
-// snapshot fails the fence and is kept; the next sweep decides again.
+// UpdateIfMatch on a live re-read's revision. The update clears the assignee
+// and session affinity but keeps gc.continuation_group. A claim that lands
+// after the snapshot fails the fence and is kept; the next sweep decides again.
 //
 // A store that can fence neither way (a bd without --if-status/--if-assignee,
 // a legacy SQLite layout, the exec store) is refused and logged, never released
@@ -839,7 +844,7 @@ func releasePoolAssignmentWithRecheck(store beads.Store, wb beads.Bead, clearDet
 	opts := beads.UpdateOpts{
 		Assignee: stringPtr(""),
 		Status:   stringPtr("open"),
-		Metadata: clearedSessionAffinityMetadata(),
+		Metadata: clearedReleaseAffinityMetadata(),
 	}
 	if clearDetached {
 		opts.Metadata[detachedProbeMetadataKey] = ""

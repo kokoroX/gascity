@@ -159,7 +159,7 @@ func TestWorkReleaseConditionalWritesAtomicCleanup(t *testing.T) {
 				if got.Assignee != "" || got.Status != "open" || got.Metadata["unrelated"] != "preserve" {
 					t.Fatalf("incorrect release: %+v", got)
 				}
-				for key := range clearedSessionAffinityMetadata() {
+				for key := range clearedReleaseAffinityMetadata() {
 					if got.Metadata[key] != "" {
 						t.Errorf("%s not cleared: %q", key, got.Metadata[key])
 					}
@@ -386,7 +386,7 @@ func TestWorkReleaseConditionalWritesReleasesRevisionlessSnapshots(t *testing.T)
 						if got.Status != "open" || got.Assignee != "" {
 							t.Errorf("%s: status=%q assignee=%q, want the dead claim released", label, got.Status, got.Assignee)
 						}
-						for key := range clearedSessionAffinityMetadata() {
+						for key := range clearedReleaseAffinityMetadata() {
 							if got.Metadata[key] != "" {
 								t.Errorf("%s: %s not cleared: %q", label, key, got.Metadata[key])
 							}
@@ -1029,7 +1029,7 @@ func assertAssignee(t *testing.T, store beads.Store, id, want string) {
 // group — and `gc hook --claim` reads that group to vacuum the bead and its
 // {root, group} siblings onto the claiming session. The fallback-route disjunct
 // is covered separately; this one has no route to stamp, so only the group
-// forces the single write.
+// forces the single write. The group itself survives the release.
 func TestReleaseWorkBead_ContinuationGroupNeverRidesASecondWrite(t *testing.T) {
 	t.Run("current snapshot uses one combined write", func(t *testing.T) {
 		store := &failSecondWriteStore{MemStore: beads.NewMemStore()}
@@ -1057,10 +1057,10 @@ func TestReleaseWorkBead_ContinuationGroupNeverRidesASecondWrite(t *testing.T) {
 		if got.Assignee != "" || got.Status != "open" {
 			t.Fatalf("release did not land: status=%q assignee=%q", got.Status, got.Assignee)
 		}
-		// The invariant: the bead is never claimable while still carrying the group.
-		// On the two-write path the group would survive the failing second write.
-		if g := strings.TrimSpace(got.Metadata[beadmeta.ContinuationGroupMetadataKey]); g != "" {
-			t.Errorf("continuation group = %q, want cleared — an open, unassigned bead still carrying its group lets a concurrent claim vacuum its siblings through it", g)
+		// The group survives the release, so the next claim can preassign the
+		// segment; the single write is what keeps the whole release atomic.
+		if g := strings.TrimSpace(got.Metadata[beadmeta.ContinuationGroupMetadataKey]); g != "grp-1" {
+			t.Errorf("continuation group = %q, want grp-1 preserved across the release", g)
 		}
 	})
 

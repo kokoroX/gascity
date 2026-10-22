@@ -1570,8 +1570,8 @@ func TestReleaseOrphanedPoolAssignments_ClearsSessionAffinityOnRelease(t *testin
 	if got.Metadata["gc.session_affinity"] != "" {
 		t.Fatalf("gc.session_affinity still present after release: %#v", got.Metadata)
 	}
-	if got.Metadata["gc.continuation_group"] != "" {
-		t.Fatalf("gc.continuation_group still present after release: %#v", got.Metadata)
+	if got.Metadata["gc.continuation_group"] != "main" {
+		t.Fatalf("gc.continuation_group = %q after release, want main preserved: %#v", got.Metadata["gc.continuation_group"], got.Metadata)
 	}
 	if got.Metadata["gc.routed_to"] != "worker" {
 		t.Fatalf("gc.routed_to = %q, want worker", got.Metadata["gc.routed_to"])
@@ -2359,10 +2359,10 @@ func TestReleaseOrphanedPoolAssignments_ContinuationGroupBeadBypassesCASWindow(t
 	// so a follow-up metadata clear would briefly expose an open, unassigned bead
 	// whose gc.continuation_group is still set, letting a concurrent
 	// `gc hook --claim` vacuum it (or its {root, group} siblings) onto a new
-	// session via the stale group. The release must instead take the recheck
-	// fallback, which clears status, assignee, and the group in a single Update —
-	// so the group is never visible on a claimable bead. This is the regression
-	// pin for the CAS release-then-clear ordering window.
+	// session. The release must instead take the recheck fallback, which writes
+	// status, assignee and the affinity clear in a single Update while keeping
+	// the group. This is the regression pin for the CAS release-then-clear
+	// ordering window.
 	store, work := newConditionalReleaseProbeStoreWithMetadata(t, map[string]string{
 		"gc.root_bead_id":       "root-1",
 		"gc.continuation_group": "grp-1",
@@ -2378,14 +2378,14 @@ func TestReleaseOrphanedPoolAssignments_ContinuationGroupBeadBypassesCASWindow(t
 	if len(store.assignmentUpdates) != 1 {
 		t.Fatalf("assignment-shaped Update calls = %+v, want exactly one atomic release write", store.assignmentUpdates)
 	}
-	// The single release write must clear the assignment AND the continuation
-	// group together, leaving no open/unassigned/group-still-set window.
+	// The single release write must clear the assignment and session affinity,
+	// and must leave the continuation group out of the clear so it survives.
 	update := store.assignmentUpdates[0]
 	if update.Assignee == nil || *update.Assignee != "" || update.Status == nil || *update.Status != "open" {
 		t.Fatalf("release update = %+v, want assignee=\"\" and status=open", update)
 	}
-	if v, ok := update.Metadata[beadmeta.ContinuationGroupMetadataKey]; !ok || v != "" {
-		t.Fatalf("release update metadata[%s] = %q (present=%v), want cleared in the same write", beadmeta.ContinuationGroupMetadataKey, v, ok)
+	if v, ok := update.Metadata[beadmeta.ContinuationGroupMetadataKey]; ok && v != "" {
+		t.Fatalf("release update metadata[%s] = %q, want the group preserved", beadmeta.ContinuationGroupMetadataKey, v)
 	}
 
 	final, err := store.Get(work.ID)
@@ -2395,8 +2395,8 @@ func TestReleaseOrphanedPoolAssignments_ContinuationGroupBeadBypassesCASWindow(t
 	if final.Status != "open" || final.Assignee != "" {
 		t.Fatalf("work = status %q assignee %q, want open/unassigned", final.Status, final.Assignee)
 	}
-	if strings.TrimSpace(final.Metadata[beadmeta.ContinuationGroupMetadataKey]) != "" {
-		t.Fatalf("gc.continuation_group = %q, want cleared after release", final.Metadata[beadmeta.ContinuationGroupMetadataKey])
+	if got := strings.TrimSpace(final.Metadata[beadmeta.ContinuationGroupMetadataKey]); got != "grp-1" {
+		t.Fatalf("gc.continuation_group = %q, want grp-1 preserved after release", got)
 	}
 	if strings.TrimSpace(final.Metadata["gc.session_affinity"]) != "" {
 		t.Fatalf("gc.session_affinity = %q, want cleared after release", final.Metadata["gc.session_affinity"])

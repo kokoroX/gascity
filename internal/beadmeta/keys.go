@@ -266,7 +266,9 @@ const (
 	// when it was kept) mark a claim a close kept because no lane serves it
 	// (owner ruling O5, revised): stranded work, which session.stranded_claims
 	// reports while the claim is still assigned as it was kept. A release
-	// clears all three (SessionAffinityMetadataKeys).
+	// clears all three, together with SessionAffinityMetadataKey, but keeps
+	// ContinuationGroupMetadataKey: the group belongs to the workflow segment,
+	// not to the session that held it.
 	StrandedMetadataKey         = "gc.stranded"
 	StrandedSessionMetadataKey  = "gc.stranded_session"
 	StrandedAssigneeMetadataKey = "gc.stranded_assignee"
@@ -700,19 +702,29 @@ var KnownMetadataPrefixes = []string{
 
 // SessionAffinityMetadataKeys are the metadata keys that pin a work bead to a
 // particular live session through continuation-group routing. They must be
-// cleared together whenever work is rerouted off its original session without a
-// preserved assignee (retry-to-pool, reopen-source, orphan/closed/retired-session
-// release); otherwise a later claim re-vacuums the bead onto an unrelated
+// cleared together whenever work is rerouted onto a different route or
+// workflow without a preserved assignee (retry-to-pool, reopen-source, graph
+// re-decoration); otherwise a later claim re-vacuums the bead onto an unrelated
 // session via the stale group. Both cmd/gc and internal/dispatch consume this
 // single list so a new affinity key cannot silently fix one clear path while
 // leaving another stale.
+//
+// A close, drain, orphan, or other dead-session release is NOT such a reroute:
+// it moves the claim off a dead session but leaves its route and its workflow
+// segment in place, so it clears only SessionAffinityMetadataKey and the
+// stranded stamps
+// (see cmd/gc's release paths and cmd/gc.clearedReleaseAffinityMetadata) and
+// keeps ContinuationGroupMetadataKey.
+// The group then lets the next session to claim any step of the segment
+// preassign the rest to itself, so a segment interrupted mid-workflow still
+// runs on one session.
 //
 // Of these keys, ContinuationGroupMetadataKey is the active routing vector: the
 // hook claim path reads it to vacuum open, unassigned sibling work onto the
 // claiming session. SessionAffinityMetadataKey is currently an advisory marker —
 // it is written (e.g. internal/dispatch/drain.go) but no Go routing path reads
-// it yet, so it is cleared alongside the group for hygiene and future-proofing
-// rather than because it gates routing today.
+// it yet, so it is cleared for hygiene and future-proofing rather than because
+// it gates routing today.
 var SessionAffinityMetadataKeys = []string{
 	SessionAffinityMetadataKey,
 	ContinuationGroupMetadataKey,
