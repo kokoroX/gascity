@@ -407,8 +407,13 @@ func TestGcBdDoesNotPrintTheMissingBuiltinImportHint(t *testing.T) {
 }
 
 // TestGcBdStillPrintsConfigLoadWarnings pins that skipping the import scan did
-// not take the composition's own warnings with it.
+// not take the composition's own warnings with it. That is about gc bd still
+// producing the composition's warnings, not about where they are delivered:
+// since config_advisory_policy.go they reach a non-interactive stderr only for
+// a reporting command, which gc bd is not (and must not be — it is an agent's
+// hottest command), so this case asserts the interactive delivery.
 func TestGcBdStillPrintsConfigLoadWarnings(t *testing.T) {
+	assumeInteractiveConfigAdvisories(t)
 	cityDir := newBdTrimsTestCity(t)
 	f, err := os.OpenFile(filepath.Join(cityDir, "city.toml"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {

@@ -163,6 +163,11 @@ func emitLoadCityConfigWarnings(w io.Writer, prov *config.Provenance) {
 	if w == nil || prov == nil || len(prov.Warnings) == 0 {
 		return
 	}
+	// One policy for every caller; see config_advisory_policy.go.
+	target := configAdvisoryTarget(w)
+	if configAdvisoriesSuppressed(target) {
+		return
+	}
 	seen := make(map[string]struct{}, len(prov.Warnings))
 	for _, warning := range prov.Warnings {
 		if !shouldEmitLoadCityConfigWarning(warning) {
@@ -172,7 +177,7 @@ func emitLoadCityConfigWarnings(w io.Writer, prov *config.Provenance) {
 			continue
 		}
 		seen[warning] = struct{}{}
-		fmt.Fprintln(w, warning) //nolint:errcheck // best-effort warning emission
+		fmt.Fprintln(target, warning) //nolint:errcheck // best-effort warning emission
 	}
 }
 
