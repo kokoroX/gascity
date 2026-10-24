@@ -211,6 +211,14 @@ func doRigSetEndpoint(fs fsys.FS, cityPath, rigName string, opts rigEndpointOpti
 		fmt.Fprintf(stderr, "gc rig set-endpoint: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	cityHasBdOwnedDirectBinding := false
+	if opts.Inherit && cityState.EndpointOrigin == contract.EndpointOriginManagedCity {
+		cityHasBdOwnedDirectBinding, err = contract.ScopeCarriesBdOwnedDirectBinding(fsys.OSFS{}, cityPath, cityPath, "")
+		if err != nil {
+			fmt.Fprintf(stderr, "gc rig set-endpoint: classify city beads binding: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
 	currentState, err := resolveOwnerRigConfigState(cityPath, rig, cityState)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc rig set-endpoint: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -229,7 +237,7 @@ func doRigSetEndpoint(fs fsys.FS, cityPath, rigName string, opts rigEndpointOpti
 		return 0
 	}
 
-	if opts.Inherit && cityState.EndpointOrigin == contract.EndpointOriginManagedCity {
+	if opts.Inherit && cityState.EndpointOrigin == contract.EndpointOriginManagedCity && !cityHasBdOwnedDirectBinding {
 		if _, err := readManagedRuntimePublishedPort(cityPath); err != nil {
 			fmt.Fprintf(stderr, "gc rig set-endpoint: managed city endpoint unavailable: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1
@@ -266,7 +274,7 @@ func doRigSetEndpoint(fs fsys.FS, cityPath, rigName string, opts rigEndpointOpti
 		writeRigEndpointRollbackError(fs, stderr, snapshots, "syncing compat city config", err)
 		return 1
 	}
-	if err := syncRigManagedPortArtifact(cityPath, rig.Path, cityState, targetState); err != nil {
+	if err := syncRigManagedPortArtifact(cityPath, rig.Path, cityState, targetState, cityHasBdOwnedDirectBinding); err != nil {
 		writeRigEndpointRollbackError(fs, stderr, snapshots, "syncing managed port artifact", err)
 		return 1
 	}
@@ -511,8 +519,9 @@ func scopeMetadataPath(scopeRoot string) string {
 	return filepath.Join(scopeRoot, ".beads", "metadata.json")
 }
 
-func syncRigManagedPortArtifact(cityPath, rigPath string, cityState, rigState contract.ConfigState) error {
-	if cityState.EndpointOrigin == contract.EndpointOriginManagedCity && rigState.EndpointOrigin == contract.EndpointOriginInheritedCity {
+// syncRigManagedPortArtifact mirrors gc's managed port for inherited rigs and removes other port mirrors.
+func syncRigManagedPortArtifact(cityPath, rigPath string, cityState, rigState contract.ConfigState, cityHasBdOwnedDirectBinding bool) error {
+	if cityState.EndpointOrigin == contract.EndpointOriginManagedCity && rigState.EndpointOrigin == contract.EndpointOriginInheritedCity && !cityHasBdOwnedDirectBinding {
 		port, err := readManagedRuntimePublishedPort(cityPath)
 		if err != nil {
 			return err

@@ -900,6 +900,51 @@ func TestDoRigSetEndpointInheritManagedUnavailableDoesNotWriteFiles(t *testing.T
 	}
 }
 
+// TestDoRigSetEndpointInheritBdOwnedDirectCity inherits bd's binding without a gc endpoint mirror or managed port file.
+func TestDoRigSetEndpointInheritBdOwnedDirectCity(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(t.TempDir(), "frontend")
+	writeRigEndpointCityConfig(t, cityDir, rigDir)
+	writeRigEndpointMetadata(t, cityDir, "gc_hq")
+	if err := os.WriteFile(filepath.Join(cityDir, ".beads", "config.yaml"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cityMetadata := `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_server_host":"db.example.test","dolt_server_port":3306,"dolt_server_user":"root","dolt_database":"gc_hq"}`
+	if err := os.WriteFile(filepath.Join(cityDir, ".beads", "metadata.json"), []byte(cityMetadata), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeRigEndpointMetadata(t, rigDir, "pl")
+	writeRigEndpointCanonicalConfig(t, rigDir, contract.ConfigState{
+		IssuePrefix:    "pl",
+		EndpointOrigin: contract.EndpointOriginExplicit,
+		EndpointStatus: contract.EndpointStatusVerified,
+		DoltHost:       "old-db.example.com",
+		DoltPort:       "3307",
+		DoltUser:       "old-user",
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := doRigSetEndpoint(fsys.OSFS{}, cityDir, "frontend", rigEndpointOptions{Inherit: true}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("doRigSetEndpoint() = %d, want 0; stderr = %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "managed city endpoint unavailable") {
+		t.Errorf("stderr = %q, want no managed city endpoint unavailable error", stderr.String())
+	}
+	state := readRigEndpointConfigState(t, rigDir)
+	if state.EndpointOrigin != contract.EndpointOriginInheritedCity || state.EndpointStatus != contract.EndpointStatusVerified {
+		t.Errorf("config state = %+v, want verified inherited_city", state)
+	}
+	if state.DoltHost != "" || state.DoltPort != "" || state.DoltUser != "" {
+		t.Errorf("config state = %+v, want no host/port/user mirror for a bd-owned direct city", state)
+	}
+	if _, err := os.Stat(filepath.Join(rigDir, ".beads", "dolt-server.port")); !os.IsNotExist(err) {
+		t.Errorf("rig dolt-server.port stat error = %v, want file absent", err)
+	}
+}
+
 func TestDoRigSetEndpointInheritPostgresCityIgnoresStaleManagedRuntime(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 

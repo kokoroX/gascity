@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -97,5 +98,28 @@ func TestScopeCarriesBdOwnedDirectBindingIgnoresTheManagedHostOverride(t *testin
 	}
 	if got {
 		t.Fatalf("a binding naming gc's own managed host classified as bd-owned")
+	}
+}
+
+// TestValidateInheritedCityEndpointMirrorAcceptsBdOwnedDirectCity accepts inheritance without a gc endpoint mirror.
+func TestValidateInheritedCityEndpointMirrorAcceptsBdOwnedDirectCity(t *testing.T) {
+	fs := fsys.OSFS{}
+	city := t.TempDir()
+	rig := filepath.Join(city, "rigs", "frontend")
+	writeRawMetadata(t, fs, city, `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_server_host":"db.example.test","dolt_server_port":3306,"dolt_server_user":"root","dolt_database":"gc_hq"}`)
+	if err := os.WriteFile(filepath.Join(city, ".beads", "config.yaml"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rig, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rigConfig := "issue_prefix: pl\ngc.endpoint_origin: inherited_city\ngc.endpoint_status: verified\ndolt.mode: server\ndolt.auto-start: false\n"
+	if err := os.WriteFile(filepath.Join(rig, ".beads", "config.yaml"), []byte(rigConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCanonicalMetadata(t, fs, rig, "pl")
+
+	if err := ValidateInheritedCityEndpointMirror(fs, city, rig); err != nil {
+		t.Fatalf("ValidateInheritedCityEndpointMirror() = %v, want no drift for a bd-owned direct city", err)
 	}
 }

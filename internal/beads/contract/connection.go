@@ -494,7 +494,8 @@ func AllowsInvalidInheritedCityFallback(fs fsys.FS, cityRoot, scopeRoot string) 
 	return cityResolved.Kind == ScopeConfigAuthoritative && cityResolved.State.EndpointOrigin == EndpointOriginCityCanonical, nil
 }
 
-// ValidateInheritedCityEndpointMirror checks that an inherited rig mirrors the city endpoint.
+// ValidateInheritedCityEndpointMirror checks that an inherited rig mirrors the city endpoint
+// only when the city's own config is gc-canonical.
 func ValidateInheritedCityEndpointMirror(fs fsys.FS, cityRoot, scopeRoot string) error {
 	resolved, err := ResolveScopeConfigState(fs, cityRoot, scopeRoot, "")
 	if err != nil {
@@ -503,6 +504,11 @@ func ValidateInheritedCityEndpointMirror(fs fsys.FS, cityRoot, scopeRoot string)
 	if resolved.Kind != ScopeConfigAuthoritative || resolved.State.EndpointOrigin != EndpointOriginInheritedCity {
 		return nil
 	}
+	cityResolved, err := ResolveScopeConfigState(fs, cityRoot, cityRoot, "")
+	if err != nil || cityResolved.Kind != ScopeConfigAuthoritative || cityResolved.State.EndpointOrigin != EndpointOriginCityCanonical {
+		return nil
+	}
+
 	rigCfg := resolved.State
 	cityTarget, err := ResolveDoltConnectionTarget(fs, cityRoot, cityRoot)
 	if err != nil {
