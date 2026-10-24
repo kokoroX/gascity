@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/clock"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
@@ -350,6 +352,126 @@ func TestReconcileSessionBeads_ConfigDriftDrainAckRuntimeUnavailablePreservesDra
 	if _, activityCalls := sp.counts(); activityCalls < 3 {
 		t.Fatalf("activity observations = %d, want queued drain-ack observation", activityCalls)
 	}
+}
+
+// Kills: the degraded-env restart. A running configured named session whose
+// start config cannot be resolved (the operator's pack edit landed before
+// "gc import install" wrote packs.lock) used to fall through the
+// preserved-named branch with a zero-value TemplateParams. The config-drift
+// block then read the empty config's fingerprint as drift, stopped the live
+// runtime, recorded start-pending, and let the wake pass start the session
+// from unresolved params. An unresolved start config must leave the runtime
+// untouched, and a later tick that resolves the same unchanged config must
+// not restart it either.
+func TestReconcileSessionBeads_UnresolvedPreservedNamedTemplateKeepsRuntime(t *testing.T) {
+	env := newReconcilerTestEnv(t)
+	env.cfg = &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		Providers:     map[string]config.ProviderSpec{"claude": {}},
+		Agents:        []config.Agent{{Name: "worker", Provider: "claude"}},
+		NamedSessions: []config.NamedSession{{Template: "worker", Mode: "always"}},
+	}
+	sessionName := config.NamedSessionRuntimeName("test-city", env.cfg.Workspace, "worker")
+	if err := env.sp.Start(context.Background(), sessionName, runtime.Config{Command: "old-cmd"}); err != nil {
+		t.Fatalf("Start(%s): %v", sessionName, err)
+	}
+	env.sp.SetActivity(sessionName, env.clk.Now().Add(-2*time.Hour))
+
+	settingsPath := filepath.Join(env.city, ".claude", "settings.json")
+	writeNamedFixtureFile(t, settingsPath, "{}")
+
+	session := env.createSessionBead(sessionName, "worker")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		namedSessionMetadataKey:      "true",
+		namedSessionIdentityMetadata: "worker",
+		namedSessionModeMetadata:     "always",
+		"session_key":                "keep-session",
+		"wake_attempts":              "2",
+	})
+
+	// Stamp the hash a healthy resolution commits, as the session's previous
+	// start did, so resolution failure is the only variable in this test.
+	info := env.sessionInfo(session.ID)
+	snapshot, err := loadSessionBeadSnapshot(env.store)
+	if err != nil {
+		t.Fatalf("loadSessionBeadSnapshot: %v", err)
+	}
+	resolved, _, err := resolvePreservedConfiguredNamedSessionTemplate(
+		env.city, "test-city", env.cfg, env.sp, env.store, snapshot.OpenInfos(), info, env.clk, &env.stderr,
+	)
+	if err != nil {
+		t.Fatalf("healthy template resolution: %v", err)
+	}
+	env.setSessionMetadata(&session, map[string]string{
+		"started_config_hash": runtime.CoreFingerprint(sessionCoreConfigForHashInfo(resolved, info)),
+	})
+
+	// The pack changed but packs.lock does not describe it yet: resolution of
+	// the session's start config fails for this tick.
+	writeNamedFixtureFile(t, settingsPath, "{not json")
+
+	before, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get before reconcile: %v", err)
+	}
+	recorded := events.NewFake()
+	env.rec = recorded
+	startsBefore := env.sp.CountCalls("Start", sessionName)
+	stopsBefore := env.sp.CountCalls("Stop", sessionName)
+
+	assertKeptRunning := func(stage string) {
+		t.Helper()
+		if got := env.sp.CountCalls("Start", sessionName); got != startsBefore {
+			t.Fatalf("%s: Start calls = %d, want %d", stage, got, startsBefore)
+		}
+		if got := env.sp.CountCalls("Stop", sessionName); got != stopsBefore {
+			t.Fatalf("%s: Stop calls = %d, want %d", stage, got, stopsBefore)
+		}
+		after, getErr := env.store.Get(session.ID)
+		if getErr != nil {
+			t.Fatalf("%s: Get after reconcile: %v", stage, getErr)
+		}
+		for _, key := range []string{"started_config_hash", "core_hash_breakdown", "session_key"} {
+			if after.Metadata[key] != before.Metadata[key] {
+				t.Fatalf("%s: session metadata %s = %q, want untouched %q", stage, key, after.Metadata[key], before.Metadata[key])
+			}
+		}
+		if state := after.Metadata["state"]; state == string(sessionpkg.StateStartPending) {
+			t.Fatalf("%s: session state = %q, want the running runtime preserved", stage, state)
+		}
+		if ds := env.dt.get(session.ID); ds != nil {
+			t.Fatalf("%s: queued drain = %+v", stage, ds)
+		}
+		if !env.sp.IsRunning(sessionName) {
+			t.Fatalf("%s: runtime %q is no longer running", stage, sessionName)
+		}
+		for _, ev := range recorded.Events {
+			if ev.Type == events.SessionDraining {
+				t.Fatalf("%s: emitted %s %q for a session with unresolved start config", stage, ev.Type, ev.Message)
+			}
+		}
+	}
+
+	if woken := env.reconcile([]beads.Bead{before}); woken != 0 {
+		t.Fatalf("woken = %d, want 0 with unresolved start config", woken)
+	}
+	assertKeptRunning("resolution failure")
+	if !strings.Contains(env.stderr.String(), "resolve preserved named session") {
+		t.Fatalf("stderr = %q, want the resolution error surfaced", env.stderr.String())
+	}
+
+	// Resolution recovers with the config unchanged: no restart either.
+	writeNamedFixtureFile(t, settingsPath, "{}")
+	recovered, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get before recovery reconcile: %v", err)
+	}
+	before = recovered
+	if woken := env.reconcile([]beads.Bead{recovered}); woken != 0 {
+		t.Fatalf("woken = %d, want 0 on recovery with unchanged config", woken)
+	}
+	assertKeptRunning("resolution recovery")
 }
 
 func TestAdvanceSessionDrains_LivenessUnavailableAfterVerifiedStopDefersCompletion(t *testing.T) {
