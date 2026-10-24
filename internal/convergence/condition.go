@@ -200,7 +200,27 @@ func (ce ConditionEnv) Environ() []string {
 		}
 	}
 
+	// bd reads the BEADS_* credential names; GC_* values win, matching the controller projection and doltauth password precedence.
+	if password := os.Getenv("GC_DOLT_PASSWORD"); password != "" {
+		env = replaceEnvValue(env, "BEADS_DOLT_PASSWORD", password)
+	}
+	if user := os.Getenv("GC_DOLT_USER"); user != "" {
+		env = replaceEnvValue(env, "BEADS_DOLT_SERVER_USER", user)
+	}
+
 	return env
+}
+
+// replaceEnvValue replaces any existing entries for key with one key=value entry.
+func replaceEnvValue(env []string, key, value string) []string {
+	result := make([]string, 0, len(env)+1)
+	prefix := key + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 // containedIn reports whether absPath is the same as or nested under root.
