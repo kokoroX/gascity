@@ -2089,7 +2089,7 @@ func initBeadsForDirWithExecutor(cityPath, dir, prefix, doltDatabase string, exe
 			}
 			if strings.TrimSpace(cityPath) != "" {
 				overrides["GC_PACK_STATE_DIR"] = citylayout.PackStateDir(cityPath, "dolt")
-				if err := applyCanonicalScopeInitDoltEnv(overrides, cityPath, dir); err != nil {
+				if err := applyCanonicalScopeInitDoltEnv(overrides, cityPath, dir, canonicalDoltDatabase); err != nil {
 					return err
 				}
 			}

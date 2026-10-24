@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doltauth"
+	"github.com/gastownhall/gascity/internal/doltpool"
 	"github.com/gastownhall/gascity/internal/execenv"
 	"github.com/gastownhall/gascity/internal/fsys"
 )
@@ -1086,7 +1088,32 @@ func applyCanonicalConfigStateDoltEnv(env map[string]string, cityPath, scopeRoot
 	mirrorBeadsDoltScopeEnv(env, target)
 }
 
-func applyCanonicalScopeInitDoltEnv(env map[string]string, cityPath, scopeRoot string) error {
+// inheritedRigDatabaseExists probes whether an inherited rig's database exists on the city's bd-owned server; tests replace it.
+var inheritedRigDatabaseExists = doltDatabaseExistsOnServer
+
+// doltDatabaseExistsOnServer checks a server's schema catalog without selecting a database.
+func doltDatabaseExistsOnServer(host, port, user, password, database string) (bool, error) {
+	user = strings.TrimSpace(user)
+	if user == "" {
+		user = "root"
+	}
+	// Pooled handle owned by internal/doltpool; do not Close.
+	db, err := doltpool.Open(host, port, user, password, "")
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", database).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// applyCanonicalScopeInitDoltEnv projects the scope's canonical init endpoint and
+// verifies inherited rig databases on a bd-owned direct city server.
+func applyCanonicalScopeInitDoltEnv(env map[string]string, cityPath, scopeRoot, database string) error {
 	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
 	if err != nil {
 		return err
@@ -1107,6 +1134,50 @@ func applyCanonicalScopeInitDoltEnv(env map[string]string, cityPath, scopeRoot s
 		}
 		if cityResolved.Kind == contract.ScopeConfigAuthoritative && cityResolved.State.EndpointOrigin == contract.EndpointOriginCityCanonical {
 			applyCanonicalConfigStateDoltEnv(env, cityPath, scopeRoot, resolved.State)
+			return nil
+		}
+		metadataPath := filepath.Join(cityPath, ".beads", "metadata.json")
+		var metadata struct {
+			User string `json:"dolt_server_user"`
+		}
+		data, err := os.ReadFile(metadataPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("reading city beads server binding for inherited rig %s: %w", scopeRoot, err)
+		}
+		if err == nil {
+			if err := json.Unmarshal(data, &metadata); err != nil {
+				return fmt.Errorf("reading city beads server binding for inherited rig %s: %w", scopeRoot, err)
+			}
+		}
+		bdOwned, err := contract.ScopeCarriesBdOwnedDirectBinding(fsys.OSFS{}, cityPath, cityPath, "")
+		if err != nil {
+			return fmt.Errorf("reading city beads server binding for inherited rig %s: %w", scopeRoot, err)
+		}
+		if !bdOwned {
+			return nil
+		}
+		state, ok, err := contract.ReadPersistedServerBinding(fsys.OSFS{}, metadataPath)
+		if err != nil {
+			return fmt.Errorf("reading city beads server binding for inherited rig %s: %w", scopeRoot, err)
+		}
+		if !ok {
+			return fmt.Errorf("missing city beads server binding for inherited rig %s", scopeRoot)
+		}
+		state.DoltUser = strings.TrimSpace(metadata.User)
+		state.EndpointOrigin = contract.EndpointOriginInheritedCity
+		state.EndpointStatus = contract.EndpointStatusVerified
+		applyCanonicalConfigStateDoltEnv(env, cityPath, scopeRoot, state)
+		database = strings.TrimSpace(database)
+		if database == "" {
+			return fmt.Errorf("rig at %s has no pinned dolt_database, so the inherited endpoint cannot be verified", scopeRoot)
+		}
+		host, port := env["GC_DOLT_HOST"], env["GC_DOLT_PORT"]
+		exists, err := inheritedRigDatabaseExists(host, port, env["GC_DOLT_USER"], env["GC_DOLT_PASSWORD"], database)
+		if err != nil {
+			return fmt.Errorf("checking inherited rig database %q on city server %s:%s: %w", database, host, port, err)
+		}
+		if !exists {
+			return fmt.Errorf("rig at %s inherits the city endpoint; the city's store is bd-owned at %s:%s, but database %q does not exist there; if the rig's data lives on another server pin it with gc rig set-endpoint <rig> --external --host <h> --port <p>, otherwise migrate the database first", scopeRoot, host, port, database)
 		}
 		return nil
 	default:
