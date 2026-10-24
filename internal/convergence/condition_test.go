@@ -184,6 +184,95 @@ func TestConditionEnvEnvironUsesStorePathForBeadsDir(t *testing.T) {
 	}
 }
 
+func TestConditionEnvEnvironMapsDoltCredentials(t *testing.T) {
+	tests := []struct {
+		name  string
+		set   map[string]string
+		want  map[string]string
+		count map[string]int
+	}{
+		{
+			name: "GC password is forwarded under bd name",
+			set:  map[string]string{"GC_DOLT_PASSWORD": "secret"},
+			want: map[string]string{"BEADS_DOLT_PASSWORD": "secret", "GC_DOLT_PASSWORD": "secret"},
+			count: map[string]int{
+				"BEADS_DOLT_PASSWORD": 1,
+				"GC_DOLT_PASSWORD":    1,
+			},
+		},
+		{
+			name: "GC password overrides bd password",
+			set:  map[string]string{"GC_DOLT_PASSWORD": "gcpass", "BEADS_DOLT_PASSWORD": "beadspass"},
+			want: map[string]string{"BEADS_DOLT_PASSWORD": "gcpass"},
+			count: map[string]int{
+				"BEADS_DOLT_PASSWORD": 1,
+			},
+		},
+		{
+			name:  "bd password is forwarded",
+			set:   map[string]string{"BEADS_DOLT_PASSWORD": "beadspass"},
+			want:  map[string]string{"BEADS_DOLT_PASSWORD": "beadspass"},
+			count: map[string]int{"BEADS_DOLT_PASSWORD": 1},
+		},
+		{
+			name:  "no password is absent",
+			set:   map[string]string{},
+			count: map[string]int{"BEADS_DOLT_PASSWORD": 0},
+		},
+		{
+			name: "GC user is forwarded under bd name",
+			set:  map[string]string{"GC_DOLT_USER": "agent"},
+			want: map[string]string{"BEADS_DOLT_SERVER_USER": "agent", "GC_DOLT_USER": "agent"},
+			count: map[string]int{
+				"BEADS_DOLT_SERVER_USER": 1,
+				"GC_DOLT_USER":           1,
+			},
+		},
+		{
+			name: "GC user overrides bd user",
+			set:  map[string]string{"GC_DOLT_USER": "agent", "BEADS_DOLT_SERVER_USER": "other"},
+			want: map[string]string{"BEADS_DOLT_SERVER_USER": "agent"},
+			count: map[string]int{
+				"BEADS_DOLT_SERVER_USER": 1,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, key := range []string{
+				"GC_DOLT_PASSWORD", "BEADS_DOLT_PASSWORD",
+				"GC_DOLT_USER", "BEADS_DOLT_SERVER_USER",
+			} {
+				t.Setenv(key, tt.set[key])
+			}
+
+			env := ConditionEnv{CityPath: "/city"}.Environ()
+			lookup := make(map[string]string)
+			counts := make(map[string]int)
+			for _, entry := range env {
+				parts := strings.SplitN(entry, "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				lookup[parts[0]] = parts[1]
+				counts[parts[0]]++
+			}
+
+			for key, want := range tt.want {
+				if got := lookup[key]; got != want {
+					t.Errorf("%s = %q, want %q", key, got, want)
+				}
+			}
+			for key, want := range tt.count {
+				if got := counts[key]; got != want {
+					t.Errorf("%s occurs %d times, want %d", key, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestConditionEnvEnvironPreservesDoltConnection(t *testing.T) {
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "33061")
 	t.Setenv("GC_DOLT_HOST", "127.0.0.1")
