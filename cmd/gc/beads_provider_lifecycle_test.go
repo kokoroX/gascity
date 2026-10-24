@@ -4042,6 +4042,199 @@ dolt.port: 4407
 	}
 }
 
+// newInheritedRigInitFixture prepares a direct rig and records its provider init environment.
+func newInheritedRigInitFixture(t *testing.T, cityConfig, cityMetadata string, providerOwned bool, rigConfigs ...string) (cityDir, rigDir, logFile string) {
+	t.Helper()
+	clearGCEnv(t)
+	rigConfig := "issue_prefix: pl\ngc.endpoint_origin: inherited_city\ngc.endpoint_status: verified\ndolt.auto-start: false\ndolt.mode: server\n"
+	if len(rigConfigs) > 0 {
+		rigConfig = rigConfigs[0]
+	}
+	cityDir = t.TempDir()
+	rigDir = filepath.Join(cityDir, "rigs", "playground")
+	for _, dir := range []string{cityDir, rigDir} {
+		if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(cityDir, "city.toml"):               "[workspace]\nname = \"demo\"\n\n[[rigs]]\nname = \"playground\"\npath = \"rigs/playground\"\nprefix = \"pl\"\n",
+		filepath.Join(cityDir, ".beads", "config.yaml"):   cityConfig,
+		filepath.Join(cityDir, ".beads", "metadata.json"): cityMetadata,
+		filepath.Join(rigDir, ".beads", "config.yaml"):    rigConfig,
+		filepath.Join(rigDir, ".beads", "metadata.json"):  `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_database":"pl","dolt_server_host":"db.example.test","dolt_server_port":3306,"dolt_server_user":"root","project_id":"rig-proj"}`,
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if providerOwned {
+		journalCityScopeOwnership(t, cityDir, cityDir, providerScopeIntent{Transport: "direct", Target: "external"})
+	}
+	logFile = filepath.Join(t.TempDir(), "env.log")
+	script := filepath.Join(t.TempDir(), "gc-beads-bd")
+	content := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = init ]; then printf '%%s|%%s|%%s|%%s|%%s\\n' \"${BEADS_DIR:-}\" \"${GC_DOLT_HOST:-}\" \"${GC_DOLT_PORT:-}\" \"${GC_DOLT_USER:-}\" \"${BEADS_DOLT_SERVER_HOST:-}\" > %q; fi\nexit 0\n", logFile)
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_BEADS", "exec:"+script)
+	t.Setenv("GC_BEADS_SCOPE_ROOT", cityDir)
+	oldFinalize := finalizeCanonicalBdScopeInitForProvider
+	finalizeCanonicalBdScopeInitForProvider = func(_, _, _, _ string) error { return nil }
+	t.Cleanup(func() { finalizeCanonicalBdScopeInitForProvider = oldFinalize })
+	return cityDir, rigDir, logFile
+}
+
+const inheritedRigInitCityMetadata = `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_server_host":"db.example.test","dolt_server_port":3306,"dolt_server_user":"root","dolt_database":"gc_hq","project_id":"city-proj"}`
+
+// recordInheritedRigDatabaseChecks replaces the database probe and captures every argument.
+func recordInheritedRigDatabaseChecks(t *testing.T, exists bool, checkErr error) *[][]string {
+	t.Helper()
+	var calls [][]string
+	oldCheck := inheritedRigDatabaseExists
+	inheritedRigDatabaseExists = func(host, port, user, password, database string) (bool, error) {
+		calls = append(calls, []string{host, port, user, password, database})
+		return exists, checkErr
+	}
+	t.Cleanup(func() { inheritedRigDatabaseExists = oldCheck })
+	return &calls
+}
+
+// requireInheritedRigInitEnv checks the endpoint passed to the init subprocess.
+func requireInheritedRigInitEnv(t *testing.T, logFile, rigDir, host, port, user string) {
+	t.Helper()
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read init env log: %v", err)
+	}
+	want := strings.Join([]string{filepath.Join(rigDir, ".beads"), host, port, user, host}, "|")
+	if got := strings.TrimSpace(string(data)); got != want {
+		t.Fatalf("init env = %q, want %q", got, want)
+	}
+}
+
+// requireInheritedRigInitNotCalled checks that a failed guard prevents provider init.
+func requireInheritedRigInitNotCalled(t *testing.T, logFile string) {
+	t.Helper()
+	if data, err := os.ReadFile(logFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("init log = %q, err = %v, want absent", data, err)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigUsesBdOwnedCityBinding verifies endpoint and auth projection before init.
+func TestInitBeadsForDirInheritedRigUsesBdOwnedCityBinding(t *testing.T) {
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, "", inheritedRigInitCityMetadata, true)
+	t.Setenv("GC_DOLT_PASSWORD", "s3cret")
+	calls := recordInheritedRigDatabaseChecks(t, true, nil)
+	if err := initBeadsForDir(cityDir, rigDir, "pl", "pl"); err != nil {
+		t.Fatalf("initBeadsForDir: %v", err)
+	}
+	requireInheritedRigInitEnv(t, logFile, rigDir, "db.example.test", "3306", "root")
+	want := [][]string{{"db.example.test", "3306", "root", "s3cret", "pl"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("database checks = %v, want %v", *calls, want)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigKeepsCanonicalCityBinding preserves canonical city init behavior.
+func TestInitBeadsForDirInheritedRigKeepsCanonicalCityBinding(t *testing.T) {
+	cityConfig := "gc.endpoint_origin: city_canonical\ngc.endpoint_status: verified\ndolt.host: canonical.example.test\ndolt.port: 4407\ndolt.user: root\ndolt.auto-start: false\n"
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, cityConfig, inheritedRigInitCityMetadata, false, "issue_prefix: pl\ngc.endpoint_origin: inherited_city\ngc.endpoint_status: verified\ndolt.auto-start: false\ndolt.mode: server\ndolt.host: canonical.example.test\ndolt.port: 4407\ndolt.user: root\n")
+	calls := recordInheritedRigDatabaseChecks(t, true, nil)
+	if err := initBeadsForDir(cityDir, rigDir, "pl", "pl"); err != nil {
+		t.Fatalf("initBeadsForDir: %v", err)
+	}
+	requireInheritedRigInitEnv(t, logFile, rigDir, "canonical.example.test", "4407", "root")
+	if len(*calls) != 0 {
+		t.Fatalf("unexpected database checks: %v", *calls)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigKeepsManagedCityEndpoint leaves managed init unprobed.
+func TestInitBeadsForDirInheritedRigKeepsManagedCityEndpoint(t *testing.T) {
+	cityConfig := "gc.endpoint_origin: managed_city\ngc.endpoint_status: verified\ndolt.auto-start: false\n"
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, cityConfig, `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_database":"gc_hq"}`, false)
+	calls := recordInheritedRigDatabaseChecks(t, true, nil)
+	if err := initBeadsForDir(cityDir, rigDir, "pl", "pl"); err != nil {
+		t.Fatalf("initBeadsForDir: %v", err)
+	}
+	requireInheritedRigInitEnv(t, logFile, rigDir, "", "", "")
+	if len(*calls) != 0 {
+		t.Fatalf("unexpected database checks: %v", *calls)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigIgnoresLocalCityBinding excludes local bindings from external checks.
+func TestInitBeadsForDirInheritedRigIgnoresLocalCityBinding(t *testing.T) {
+	metadata := strings.ReplaceAll(inheritedRigInitCityMetadata, "db.example.test", "127.0.0.1")
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, "", metadata, true)
+	calls := recordInheritedRigDatabaseChecks(t, true, nil)
+	if err := initBeadsForDir(cityDir, rigDir, "pl", "pl"); err != nil {
+		t.Fatalf("initBeadsForDir: %v", err)
+	}
+	requireInheritedRigInitEnv(t, logFile, rigDir, "", "", "")
+	if len(*calls) != 0 {
+		t.Fatalf("unexpected database checks: %v", *calls)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigRejectsMalformedCityBinding prevents init with invalid metadata.
+func TestInitBeadsForDirInheritedRigRejectsMalformedCityBinding(t *testing.T) {
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, "", "{invalid", true)
+	calls := recordInheritedRigDatabaseChecks(t, true, nil)
+	if err := initBeadsForDir(cityDir, rigDir, "pl", "pl"); err == nil {
+		t.Fatal("initBeadsForDir succeeded with malformed city metadata")
+	}
+	requireInheritedRigInitNotCalled(t, logFile)
+	if len(*calls) != 0 {
+		t.Fatalf("unexpected database checks: %v", *calls)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigRejectsMissingDatabase requires migration or an explicit endpoint.
+func TestInitBeadsForDirInheritedRigRejectsMissingDatabase(t *testing.T) {
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, "", inheritedRigInitCityMetadata, true)
+	t.Setenv("GC_DOLT_PASSWORD", "s3cret")
+	calls := recordInheritedRigDatabaseChecks(t, false, nil)
+	err := initBeadsForDir(cityDir, rigDir, "pl", "pl")
+	if err == nil {
+		t.Fatal("initBeadsForDir succeeded with missing inherited database")
+	}
+	for _, fragment := range []string{rigDir, "pl", "db.example.test:3306", "gc rig set-endpoint", "migrate"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("init error = %v, want %q", err, fragment)
+		}
+	}
+	requireInheritedRigInitNotCalled(t, logFile)
+	want := [][]string{{"db.example.test", "3306", "root", "s3cret", "pl"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("database checks = %v, want %v", *calls, want)
+	}
+}
+
+// TestInitBeadsForDirInheritedRigPropagatesDatabaseCheckError preserves retryable probe failures.
+func TestInitBeadsForDirInheritedRigPropagatesDatabaseCheckError(t *testing.T) {
+	cityDir, rigDir, logFile := newInheritedRigInitFixture(t, "", inheritedRigInitCityMetadata, true)
+	t.Setenv("GC_DOLT_PASSWORD", "s3cret")
+	checkErr := errors.New("dial tcp: refused")
+	calls := recordInheritedRigDatabaseChecks(t, false, checkErr)
+	err := initBeadsForDir(cityDir, rigDir, "pl", "pl")
+	if !errors.Is(err, checkErr) {
+		t.Fatalf("init error = %v, want wrapped %v", err, checkErr)
+	}
+	for _, fragment := range []string{"pl", "db.example.test:3306"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("init error = %v, want %q", err, fragment)
+		}
+	}
+	requireInheritedRigInitNotCalled(t, logFile)
+	want := [][]string{{"db.example.test", "3306", "root", "s3cret", "pl"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("database checks = %v, want %v", *calls, want)
+	}
+}
+
 func TestInitBeadsForDirCanonicalRigClearsBoundCityBackendEnv(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := filepath.Join(cityDir, "rigs", "canonical-dolt")
