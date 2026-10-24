@@ -2529,21 +2529,27 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				if template == "" {
 					template = infoPostHeal.Template
 				}
-				switch {
-				case preserveErr != nil:
+				if preserveErr != nil {
 					fmt.Fprintf(stderr, "session reconciler: resolve preserved named session %s: %v\n", name, preserveErr) //nolint:errcheck
-				default:
-					tp = preservedTP
-					desired = true
-				}
-				if trace != nil {
-					outcome := TraceOutcomeResolutionFailed
-					if desired {
-						outcome = TraceOutcomeKeptOpen
+					if trace != nil {
+						trace.RecordDecision(TraceSiteReconcilerPreserveConfiguredNamed, TraceReasonPreserve, TraceOutcomeResolutionFailed, template, name, traceRecordPayload{
+							"provider_alive": providerAlive,
+							"degraded":       true,
+						})
 					}
-					trace.RecordDecision(TraceSiteReconcilerPreserveConfiguredNamed, TraceReasonPreserve, outcome, template, name, traceRecordPayload{
+					// The session's start config is unresolved, so tp is zero on
+					// this path. Falling through to the lifecycle pass would read
+					// that empty config's fingerprint as drift against
+					// StartedConfigHash, stop the running runtime and restart it
+					// from the unresolved params. Keep the runtime exactly as it
+					// is and resolve again next tick.
+					continue
+				}
+				tp = preservedTP
+				if trace != nil {
+					trace.RecordDecision(TraceSiteReconcilerPreserveConfiguredNamed, TraceReasonPreserve, TraceOutcomeKeptOpen, template, name, traceRecordPayload{
 						"provider_alive": providerAlive,
-						"degraded":       preserveErr != nil,
+						"degraded":       false,
 					})
 				}
 			case pendingCreateSessionStillLeasedInfo(infoPostHeal, cfg, clk):
