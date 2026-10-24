@@ -2359,6 +2359,35 @@ func TestRigDoltServerCheck_InheritedRigDriftIsError(t *testing.T) {
 	}
 }
 
+// TestRigDoltServerCheck_InheritedRigOfBdOwnedDirectCityIsNotDrift accepts a rig without an endpoint mirror of bd's binding.
+func TestRigDoltServerCheck_InheritedRigOfBdOwnedDirectCityIsNotDrift(t *testing.T) {
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(cityDir, "frontend")
+	fs := fsys.OSFS{}
+
+	writeDoctorRawMetadata(t, cityDir, `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_server_host":"db.example.test","dolt_server_port":3306,"dolt_server_user":"root","dolt_database":"gc_hq"}`)
+	if err := os.WriteFile(filepath.Join(cityDir, ".beads", "config.yaml"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rigDir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rigConfig := "issue_prefix: pl\ngc.endpoint_origin: inherited_city\ngc.endpoint_status: verified\ndolt.mode: server\ndolt.auto-start: false\n"
+	if err := os.WriteFile(filepath.Join(rigDir, ".beads", "config.yaml"), []byte(rigConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeDoctorCanonicalMetadata(t, fs, rigDir, "pl")
+
+	c := NewRigDoltServerCheck(cityDir, config.Rig{Name: "frontend", Path: rigDir}, false)
+	r := c.Run(&CheckContext{})
+	if r.Status == StatusError {
+		t.Errorf("status = %d, want no error for inherited bd-owned direct city; msg = %s", r.Status, r.Message)
+	}
+	if strings.Contains(r.Message, "inherited city endpoint drift") {
+		t.Errorf("message = %q, want no inherited city endpoint drift", r.Message)
+	}
+}
+
 func TestBeadsStoreCheck_ManagedCityMissingRuntimeStateFailsBeforePing(t *testing.T) {
 	dir := setupCity(t, "[workspace]\nname = \"test\"\n")
 	fs := fsys.OSFS{}
