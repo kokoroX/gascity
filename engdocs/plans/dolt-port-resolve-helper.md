@@ -136,3 +136,36 @@ this slice:
 - **`echo` vs `printf`.** Uniformly `printf '%s\n'` — `echo` on
   POSIX mishandles `-` prefixes and backslashes. Drift here is
   the kind of thing the design pinning catches.
+
+## Update 2026-10-24: opt-in bd endpoint fallback
+
+Cities whose beads are served by a bd-managed external Dolt server
+(`.beads/metadata.json` with `dolt_mode: "server"`) have no gc-managed runtime
+state and no `GC_DOLT_PORT`, so the helper used to exit 78 for every command.
+`runtime.sh` decides the fallback from the command being run: it unconditionally
+resets any inherited `GC_DOLT_ALLOW_BD_ENDPOINT` and enables it only when
+`$0`'s directory is one of the read-only commands (`status`, `health`, `list`,
+`logs`, `sql`, executed as `commands/<name>/run.sh`). The caller's environment
+can neither opt a command in nor out; in particular, an agent that exports the
+variable cannot arm a destructive command against a shared server. With the
+opt-in, and only after managed state, provider state, and `GC_DOLT_PORT` all
+fail, the helper resolves the endpoint from read-only bd records:
+
+1. `.beads/metadata.json` `dolt_mode` must be `server` (`proxied-server` keeps
+   the existing no-op path).
+2. Host: `.beads/metadata.json` `dolt_server_host`.
+3. Port: `.beads/dolt-server.port` (bd's preferred record), then
+   `.beads/metadata.json` `dolt_server_port`.
+
+On success `runtime.sh` sets and exports `GC_DOLT_HOST`, `GC_DOLT_PORT`, and
+`GC_DOLT_ENDPOINT_SOURCE` (`bd-server-port` or `bd-metadata`) so the command's
+child processes probe the same endpoint; status's `gc-beads-bd.sh probe` reads
+those variables from its own environment. The managed, provider, and
+`GC_DOLT_PORT` paths keep their historical non-exporting behavior. Destructive
+commands (`cleanup`, `compact`, `sync`, `pull`, `recover`, `start`) are not on
+the allowlist and keep exiting 78 even when the environment exports
+`GC_DOLT_ALLOW_BD_ENDPOINT=1`; their error names the bd-managed external
+endpoint and says the command will not operate on it for data safety.
+
+This supersedes the "No new env vars" line in the historical acceptance list
+above for the new opt-in only.

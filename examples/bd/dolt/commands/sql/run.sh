@@ -15,27 +15,38 @@ PACK_DIR="${GC_PACK_DIR:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}"
 . "$PACK_DIR/assets/scripts/runtime.sh"
 data_dir="$DOLT_DATA_DIR"
 
-# Check if the server is reachable.
+# Check if the server is reachable. dolt_tcp_reachable is the POSIX
+# nc/python3 probe from runtime.sh; bash-only network redirection silently
+# fails under dash, which used to send a configured external endpoint into the
+# embedded branch.
 is_running() {
   if [ -n "$GC_DOLT_HOST" ]; then
-    # Remote server — TCP probe.
-    (echo > /dev/tcp/"$GC_DOLT_HOST"/"$GC_DOLT_PORT") 2>/dev/null && return 0
-    # Fallback: nc/ncat.
-    command -v nc >/dev/null 2>&1 && nc -z "$GC_DOLT_HOST" "$GC_DOLT_PORT" 2>/dev/null && return 0
-    return 1
+    dolt_tcp_reachable "$GC_DOLT_HOST" "$GC_DOLT_PORT"
+    return $?
   fi
   managed_runtime_tcp_reachable "$GC_DOLT_PORT"
 }
 
+reachable=false
 if is_running; then
+  reachable=true
+fi
+
+# A configured non-local host names a remote endpoint. Embedded mode would open
+# a local data dir instead of that server, so an unreachable remote host is an
+# error, not a fallback.
+if [ "$reachable" != true ] && [ -n "$GC_DOLT_HOST" ] && ! is_local_dolt_host "$GC_DOLT_HOST"; then
+  echo "gc dolt sql: cannot connect to Dolt server at $GC_DOLT_HOST:$GC_DOLT_PORT" >&2
+  exit 1
+fi
+
+if [ "$reachable" = true ]; then
   # Build connection args.
-  args=""
   if [ -n "$GC_DOLT_HOST" ]; then
     host="$GC_DOLT_HOST"
   else
     host="127.0.0.1"
   fi
-  args="--host $host --port $GC_DOLT_PORT --user $GC_DOLT_USER --no-tls"
   # Always export DOLT_CLI_PASSWORD so dolt's credential parser skips
   # the TTY password prompt. When GC_DOLT_PASSWORD is empty (the
   # managed-local default — root has no password), an unset env var
@@ -43,7 +54,7 @@ if is_running; then
   # device" under non-interactive callers (CI, scripts, automation).
   # Exporting empty satisfies dolt without changing auth outcomes.
   export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
-  exec dolt $args sql "$@"
+  exec dolt --host "$host" --port "$GC_DOLT_PORT" --user "$GC_DOLT_USER" --no-tls sql "$@"
 else
   # Embedded mode — find first database directory.
   if [ ! -d "$data_dir" ]; then

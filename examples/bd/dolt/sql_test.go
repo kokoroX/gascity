@@ -48,6 +48,21 @@ func startAcceptingListener(t *testing.T) (port int, cleanup func()) {
 	return port, cleanup
 }
 
+// closedTCPPort reserves a port on the loopback interface and immediately
+// releases it, giving the caller a port nothing is listening on.
+func closedTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	if err := l.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	return port
+}
+
 const sqlScript = "commands/sql/run.sh"
 
 // writeFakeDolt installs a stub `dolt` binary in dir that records
@@ -262,5 +277,114 @@ func TestSQLScriptConnectedBranchExportsPassword(t *testing.T) {
 			t.Fatalf("DOLT_CLI_PASSWORD was not exported when GC_DOLT_PASSWORD is empty; dolt would fall back to a TTY password prompt and fail with 'inappropriate ioctl for device'")
 		}
 		t.Fatalf("stat password marker: %v", err)
+	}
+}
+
+// TestSQLScriptBDEndpointUnreachableFailsWithoutEmbedded pins the reported
+// failure mode: a configured non-local Dolt host that does not answer must be
+// a hard error naming the endpoint, never a silent slide into embedded mode.
+// A dolt-shaped data dir is present specifically so embedded mode is possible
+// and therefore a tempting wrong turn.
+func TestSQLScriptBDEndpointUnreachableFailsWithoutEmbedded(t *testing.T) {
+	root := repoRoot(t)
+	script := filepath.Join(root, sqlScript)
+
+	binDir := t.TempDir()
+	argvFile := writeFakeDolt(t, binDir)
+
+	port := closedTCPPort(t)
+	cityPath := t.TempDir()
+	writeBDEndpointMetadata(t, cityPath, "127.0.0.2", port)
+	dataDir := filepath.Join(cityPath, "data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "testdb", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+
+	cmd := exec.Command("sh", script, "-q", "SELECT 1")
+	cmd.Env = append(filteredEnv("PATH",
+		"GC_DOLT_HOST", "GC_DOLT_PORT", "GC_DOLT_USER",
+		"GC_DOLT_PASSWORD", "GC_DOLT_DATA_DIR",
+		"GC_CITY_PATH", "GC_PACK_DIR",
+	),
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_DATA_DIR="+dataDir,
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("sql.sh exited 0 for an unreachable external endpoint; want nonzero\n%s", out)
+	}
+	want := "cannot connect to Dolt server at 127.0.0.2:" + strconv.Itoa(port)
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("sql.sh error missing %q; got:\n%s", want, out)
+	}
+	if argv := readArgv(t, argvFile); len(argv) != 0 {
+		t.Fatalf("sql.sh fell through to embedded dolt for an unreachable external endpoint; argv: %v\n%s", argv, out)
+	}
+}
+
+// TestSQLScriptBDEndpointReachablePassesEndpointArgs proves the resolved bd
+// endpoint is the one dolt is told to connect to. The host here is loopback so
+// the test can satisfy the TCP probe without a real Dolt server.
+func TestSQLScriptBDEndpointReachablePassesEndpointArgs(t *testing.T) {
+	root := repoRoot(t)
+	script := filepath.Join(root, sqlScript)
+
+	binDir := t.TempDir()
+	argvFile := writeFakeDolt(t, binDir)
+
+	port, stop := startAcceptingListener(t)
+	t.Cleanup(stop)
+
+	cityPath := t.TempDir()
+	writeBDEndpointMetadata(t, cityPath, "127.0.0.1", port)
+
+	cmd := exec.Command("sh", script, "-q", "SELECT 1")
+	cmd.Env = append(filteredEnv("PATH",
+		"GC_DOLT_HOST", "GC_DOLT_PORT", "GC_DOLT_USER",
+		"GC_DOLT_PASSWORD", "GC_DOLT_DATA_DIR",
+		"GC_CITY_PATH", "GC_PACK_DIR",
+	),
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sql.sh exited non-zero for a reachable bd endpoint: %v\n%s", err, out)
+	}
+
+	argv := readArgv(t, argvFile)
+	if len(argv) == 0 {
+		t.Fatalf("fake dolt was never invoked; output: %s", out)
+	}
+	joined := "\n" + strings.Join(argv, "\n") + "\n"
+	for _, want := range []string{
+		"\n--host\n127.0.0.1\n",
+		"\n--port\n" + strconv.Itoa(port) + "\n",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("dolt argv missing %q; got: %v", want, argv)
+		}
+	}
+}
+
+// TestSQLScriptHasNoDevTCPProbe keeps the bash-only /dev/tcp probe out of the
+// POSIX script: under dash it silently fails, which is what used to send a
+// configured external endpoint into embedded mode.
+func TestSQLScriptHasNoDevTCPProbe(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), sqlScript))
+	if err != nil {
+		t.Fatalf("read %s: %v", sqlScript, err)
+	}
+	if strings.Contains(string(data), "/dev/tcp") {
+		t.Fatalf("%s still uses the bash-only /dev/tcp probe; use the POSIX nc/python3 helper in runtime.sh", sqlScript)
 	}
 }

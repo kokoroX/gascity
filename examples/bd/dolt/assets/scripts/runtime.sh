@@ -195,6 +195,48 @@ managed_runtime_listener_pid() (
       done
 )
 
+# dolt_tcp_reachable <host> <port> is a portable TCP reachability probe for a
+# Dolt endpoint. It uses python3 when available and nc otherwise; /dev/tcp is a
+# bash extension that silently fails under dash, so it is never used here.
+dolt_tcp_reachable() (
+  host="$1"
+  port="$2"
+
+  case "$port" in
+    ''|*[!0-9]*)
+      return 1
+      ;;
+  esac
+  [ -n "$host" ] || return 1
+
+  # python3 first: its settimeout bounds connect() even to an unroutable
+  # address, while BSD nc's -w does not reliably bound the connect phase (a
+  # non-local host can otherwise stall for the kernel's ~75s TCP timeout).
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$host" "$port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect((sys.argv[1], int(sys.argv[2])))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+    return $?
+  fi
+
+  if command -v nc >/dev/null 2>&1; then
+    nc -z -w 1 "$host" "$port" >/dev/null 2>&1
+    return $?
+  fi
+
+  return 1
+)
+
 managed_runtime_tcp_reachable() (
   port="$1"
 
@@ -288,10 +330,41 @@ if bd_owns_proxied_scope; then
   GC_DOLT_PORT=""
 else
   GC_DOLT_SCOPE_BD_PROXIED=0
-  # Resolve GC_DOLT_PORT. The shared helper prefers validated live managed
-  # runtime state over stale inherited env, then falls back to GC_DOLT_PORT as
-  # an operator seed, and exits 78 if neither yields a port.
-  GC_DOLT_PORT=$(resolve_dolt_port_or_die "$DOLT_STATE_FILE" "$DOLT_PROVIDER_STATE_FILE" "$DOLT_DATA_DIR" "$GC_CITY_PATH") || exit $?
+  # Whether the bd endpoint fallback is allowed is decided by the command being
+  # run, never by the caller's environment. An inherited
+  # GC_DOLT_ALLOW_BD_ENDPOINT=1 (for example from an agent environment) must
+  # not arm destructive commands such as cleanup, compact and sync against a
+  # shared external server, so reset it unconditionally and opt in only the
+  # read-only commands this pack ships.
+  #
+  # Commands execute as commands/<name>/run.sh, so the directory name of $0
+  # identifies the command; that is the same base the command scripts use to
+  # derive PACK_DIR.
+  GC_DOLT_ALLOW_BD_ENDPOINT=0
+  case "$(basename "$(CDPATH= cd -- "$(dirname "$0")" && pwd)")" in
+    status|health|list|logs|sql) GC_DOLT_ALLOW_BD_ENDPOINT=1 ;;
+  esac
+
+  # Resolve the Dolt endpoint. The shared helper prefers validated live managed
+  # runtime state, then a provider state file, then GC_DOLT_PORT as an operator
+  # seed. Only the read-only commands allowlisted above may fall back to the
+  # endpoint bd records for an external server; destructive commands keep
+  # exiting 78.
+  _gc_dolt_endpoint=$(resolve_dolt_endpoint_or_die "$DOLT_STATE_FILE" "$DOLT_PROVIDER_STATE_FILE" "$DOLT_DATA_DIR" "$GC_CITY_PATH") || exit $?
+  GC_DOLT_PORT=$(printf '%s\n' "$_gc_dolt_endpoint" | cut -f2)
+  _gc_dolt_endpoint_host=$(printf '%s\n' "$_gc_dolt_endpoint" | cut -f1)
+  if [ -n "$_gc_dolt_endpoint_host" ]; then
+    GC_DOLT_HOST="$_gc_dolt_endpoint_host"
+    GC_DOLT_ENDPOINT_SOURCE=$(printf '%s\n' "$_gc_dolt_endpoint" | cut -f3)
+    # The endpoint came from bd's records, not from the caller's environment,
+    # so a command's children see it only when it is exported. status probes
+    # through `gc-beads-bd.sh probe`, which reads GC_DOLT_HOST and
+    # GC_DOLT_PORT from its own environment; without the export it checks the
+    # local default and reports a reachable external endpoint as unreachable.
+    # The managed, provider, and GC_DOLT_PORT paths keep their historical
+    # behavior and do not export.
+    export GC_DOLT_HOST GC_DOLT_PORT GC_DOLT_ENDPOINT_SOURCE
+  fi
 fi
 
 . "${GC_PACK_DIR:-${PACK_DIR:-${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}/dolt}}/assets/scripts/_bounded.sh"
