@@ -34,6 +34,7 @@ go_test(
         "claim_exact_test.go",
         "cleanup_test.go",
         "cook_choosing_store_test.go",
+        "molecule_blocked_by_test.go",
         "molecule_test.go",
         "native_step_topology_test.go",
         "testenv_import_test.go",

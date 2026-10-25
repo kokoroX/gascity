@@ -1520,7 +1520,7 @@ func ensureDrainItemRoot(store beads.Store, control, unit, member beads.Bead, co
 	}
 	result, err := molecule.Instantiate(context.Background(), store, recipe, molecule.Options{
 		Vars:             runtimeVars,
-		ExternalDeps:     drainWorkflowExternalDeps(recipe, blockerIDs),
+		BlockedBy:        blockerIDs,
 		PriorityOverride: member.Priority,
 	})
 	if err != nil {
@@ -1533,37 +1533,6 @@ func ensureDrainItemRoot(store beads.Store, control, unit, member beads.Bead, co
 		return "", false, fmt.Errorf("%s: instantiating drain item formula %q: %w", control.ID, itemFormula, err)
 	}
 	return result.RootID, true, nil
-}
-
-func drainWorkflowExternalDeps(recipe *formula.Recipe, blockerIDs []string) []molecule.ExternalDep {
-	if recipe == nil || len(recipe.Steps) == 0 || len(blockerIDs) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool)
-	var deps []molecule.ExternalDep
-	for _, step := range recipe.Steps {
-		stepID := strings.TrimSpace(step.ID)
-		if stepID == "" {
-			continue
-		}
-		for _, blockerID := range blockerIDs {
-			blockerID = strings.TrimSpace(blockerID)
-			if blockerID == "" {
-				continue
-			}
-			key := stepID + "\x00" + blockerID
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			deps = append(deps, molecule.ExternalDep{
-				StepID:      stepID,
-				DependsOnID: blockerID,
-				Type:        "blocks",
-			})
-		}
-	}
-	return deps
 }
 
 func drainItemRuntimeVars(recipe *formula.Recipe, vars map[string]string) map[string]string {
