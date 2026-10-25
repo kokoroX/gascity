@@ -305,6 +305,12 @@ func TestBDInitWrapperBoundsOversizedLogsAndKeepsTheConflictLine(t *testing.T) {
 func TestBDInitWrapperFallsBackToTheWorkingDirectoryScope(t *testing.T) {
 	bd, _ := fakeInitBD{status: 1, serverLog: strPtr(portConflictLine + "\n")}.install(t)
 	work := t.TempDir()
+	// macOS resolves /var through a symlink to /private/var, and the shell
+	// computes $PWD physically, exactly as bd's own scope is computed. Compare
+	// against the same spelling the wrapper will report. A no-op on Linux.
+	if resolved, err := filepath.EvalSymlinks(work); err == nil {
+		work = resolved
+	}
 
 	res := runWrapper(t, bd, work, nil, "init")
 

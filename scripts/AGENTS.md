@@ -73,3 +73,19 @@ checking anything. Linux CI cannot catch that. List files with
 `find -L <paths> -type f -print0 | xargs -0 grep -H ...` instead, as
 `check-eventexport-isolation.sh` (`grep_surface`) and
 `check-core-boundary.sh` check (f) do.
+
+The same BSD/GNU split applies to the shell stubs embedded in Go tests: the
+pinned test `PATH` resolves `sed` to macOS's `/usr/bin/sed`, whose `-i`
+requires the backup suffix to follow it, so GNU's `sed -i <script> <file>`
+makes BSD sed read the file path as its script and fail with
+`invalid command code`. Pop a line with
+`tail -n +2 "$f" >"$f.next" && mv -f "$f.next" "$f"` instead, as
+`worker_env_notify_beads_test.go`'s gh stub does. `scripts/lib/common.sh`'s
+`sed_i` wrapper covers the scripts that can source it; a standalone stub
+cannot. Such a stub is a Go raw string literal, so nothing in it — a
+comment included — may contain a backtick.
+
+BSD `wc` pads its count with leading spaces, so a stub that spells a counter
+into a filename or compares it as a string pipes it through `tr -d ' '`, as
+`worker_env_notify_beads_test.go`'s gh stub and `check-go-format.sh` do.
+A count used only in a numeric `[ "$n" -gt N ]` test needs no trimming.
