@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -253,4 +254,78 @@ func TestPinnedRuntimeMarkerHoldsNoCycle(t *testing.T) {
 	if it, ok := armRestartRequested(r); !ok || it.Reason != decideFreshCycle {
 		t.Fatalf("armRestartRequested = (%q, %q) %v, want the fresh cycle once the marker is gone", it.Kind, it.Reason, ok)
 	}
+}
+
+// TestSimFreshWakeRoutesToHolderLeavesIdleSeat verifies that work held by an
+// asleep session is realized on that holder's row. An idle live seat in the
+// multi-slot pool is neither stopped nor rewritten, and no new seat is created.
+// gc-2 has pin_awake set, giving it a wake reason unrelated to this work; if it
+// is stopped or rewritten, the request's destination is the cause. Without that
+// reason, an idle pool row is stopped with no-wake-reason.
+func TestSimFreshWakeRoutesToHolderLeavesIdleSeat(t *testing.T) {
+	gc1 := poolRow("gc-1", "worker", 1, "asleep", "wake_mode", "fresh", "instance_token", "tok-1", "session_key", "k-1", "last_woke_at", rowAt(-2*time.Hour))
+	gc2 := poolRow("gc-2", "worker", 2, "active", "instance_token", "tok-2", "session_key", "k-2", "last_woke_at", rowAt(-2*time.Hour), "awake_started_at", rowAt(-2*time.Hour), "pin_awake", "true")
+	work := beads.Bead{ID: "gw-held", Title: "work", Type: "task", Status: "open", Assignee: "gc-1", Metadata: map[string]string{"gc.routed_to": "worker"}}
+	s := scripted(t, []string{"gc-2"}, gc1, gc2, work)
+	s.cfg.Agents[0].WakeMode = "fresh"
+	for range 6 {
+		s.settle()
+		s.advance(simPatrol)
+	}
+
+	gc1Row, err := s.legs[0].backing.Get("gc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gc2Row, err := s.legs[0].backing.Get("gc-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sp.mu.Lock()
+	kills := append([]simKill(nil), s.sp.kills...)
+	s.sp.mu.Unlock()
+	for _, kill := range kills {
+		if kill.Name == "s-gc-2" {
+			t.Fatalf("gc-2 was killed: row metadata=%v, kills=%v", gc2Row.Metadata, kills)
+		}
+	}
+
+	// work_dir is left out: the sim stamps every row with the agent's
+	// default work directory, and its agent derives no per-bead directory,
+	// so the key cannot show a misrouted request. trigger_bead_id does.
+	wantGC2 := map[string]string{
+		"state":                           "active",
+		"instance_token":                  "tok-2",
+		"generation":                      "1",
+		"session_key":                     "k-2",
+		"session_name":                    "s-gc-2",
+		"pool_slot":                       "2",
+		"agent_name":                      "worker-2",
+		session.CurrentBeadIDKey:          "",
+		beadmeta.TriggerBeadIDMetadataKey: "",
+		beadmeta.PackMetadataKey:          "",
+	}
+	for key, want := range wantGC2 {
+		if got := gc2Row.Metadata[key]; got != want {
+			t.Fatalf("gc-2 metadata[%q]=%q, want %q: metadata=%v, kills=%v", key, got, want, gc2Row.Metadata, kills)
+		}
+	}
+	if !s.livePane(gc2Row) {
+		t.Fatalf("gc-2 no longer has a live pane: metadata=%v, kills=%v", gc2Row.Metadata, kills)
+	}
+	if gc1Row.Metadata["instance_token"] == "" || gc1Row.Metadata["instance_token"] == "tok-1" || !s.livePane(gc1Row) {
+		t.Fatalf("gc-1 was not awakened into a new live incarnation: metadata=%v, kills=%v", gc1Row.Metadata, kills)
+	}
+	rows, err := s.legs[0].backing.List(beads.ListQuery{Label: session.LabelSession})
+	if err != nil {
+		t.Fatalf("listing session rows: %v; gc-1 metadata=%v, gc-2 metadata=%v, kills=%v", err, gc1Row.Metadata, gc2Row.Metadata, kills)
+	}
+	ids := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ids[row.ID] = true
+	}
+	if len(ids) != 2 || !ids["gc-1"] || !ids["gc-2"] {
+		t.Fatalf("session row IDs=%v, want exactly {gc-1, gc-2}; gc-1 metadata=%v, gc-2 metadata=%v, kills=%v", ids, gc1Row.Metadata, gc2Row.Metadata, kills)
+	}
+	s.noViolations(t)
 }

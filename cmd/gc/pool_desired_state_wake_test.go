@@ -1,10 +1,15 @@
 package main
 
 import (
+	"io"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/runtime"
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
 // closedPoolSessionBead creates a closed pool-managed session bead whose
@@ -276,6 +281,152 @@ func TestComputePoolDesiredStates_FreshWakeSkipsAsleepResume(t *testing.T) {
 						t.Errorf("fresh-wake agent resumed stale asleep session %s: %#v", sessionID, r)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestBuildDesiredState_PoolCreateSkipsWorkOwnedByAnotherSession verifies that
+// work held by another session reuses the holder's row instead of creating a
+// seat, while unassigned routed work still creates a new seat.
+func TestBuildDesiredState_PoolCreateSkipsWorkOwnedByAnotherSession(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		assignee string
+		status   string
+		wantNew  bool
+	}{
+		{name: "work owned by asleep session", assignee: "sess-asleep", status: "in_progress"},
+		{name: "unassigned routed work", status: "open", wantNew: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+			agent := poolAgent("claude", "", intPtr(5), 0)
+			agent.WakeMode = "fresh"
+			agent.StartCommand = "true"
+			cfg := &config.City{Agents: []config.Agent{agent}}
+			asleep := poolSessionBeadWithState("sess-asleep", "asleep", "")
+			asleep.Metadata["quarantined_until"] = now.Add(time.Hour).Format(time.RFC3339)
+			work := workBead("work-1", "claude", tc.assignee, tc.status, 2)
+			snapshot := newSessionBeadSnapshot([]beads.Bead{asleep})
+			store := beads.NewMemStoreFrom(1, []beads.Bead{asleep, work}, nil)
+
+			desired := buildDesiredStateWithSessionBeadsAt(
+				"test-city", t.TempDir(), now, now, cfg, runtime.NewFake(),
+				store, nil, snapshot, nil, io.Discard,
+			)
+
+			if !tc.wantNew {
+				holderName := asleep.Metadata["session_name"]
+				if _, ok := desired.State[holderName]; !ok {
+					t.Fatalf("holder session %s missing from desired state: the request must be realized on the holder's row", holderName)
+				}
+			}
+
+			newSessions := 0
+			for _, info := range snapshot.OpenInfos() {
+				if info.ID == asleep.ID {
+					continue
+				}
+				newSessions++
+				if !tc.wantNew {
+					t.Fatalf("created session %s for work %s owned by session %s: the new seat cannot claim it, will exit with no_work, and will be recreated every cycle", info.ID, work.ID, work.Assignee)
+				}
+			}
+			if tc.wantNew && newSessions != 1 {
+				t.Fatalf("created %d new sessions for unassigned work %s routed to pool %s, want 1: snapshot=%#v", newSessions, work.ID, work.Metadata["gc.routed_to"], snapshot.OpenInfos())
+			}
+		})
+	}
+}
+
+// A session spawned by the pool path for a wake_mode="fresh" agent must be
+// able to claim the work that triggered it. Claiming is pull-based: a
+// replacement can only take a work bead whose Assignee names one of its own
+// identities, or unassigned work routed to its pool template. The tier plans
+// no session for work still assigned to an asleep session, in which case the
+// invariant holds vacuously.
+func TestBuildDesiredState_FreshWakeReplacementCanClaimAssignedWork(t *testing.T) {
+	beaconTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	decisionTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	const (
+		asleepSessionID = "sess-asleep"
+		poolTemplate    = "claude"
+	)
+	cases := []struct {
+		name   string
+		status string
+	}{
+		{name: "assigned open work", status: "open"},
+		{name: "assigned in_progress work", status: "in_progress"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workID := "work-" + tc.status
+			agent := poolAgent(poolTemplate, "", intPtr(5), 0)
+			agent.WakeMode = "fresh"
+			agent.StartCommand = "true"
+			cfg := &config.City{Agents: []config.Agent{agent}}
+
+			asleep := poolSessionBeadWithState(asleepSessionID, "asleep", "")
+			work := workBead(workID, poolTemplate, asleepSessionID, tc.status, 2)
+			snapshot := newSessionBeadSnapshot([]beads.Bead{asleep})
+			store := beads.NewMemStoreFrom(1, []beads.Bead{work, asleep}, nil)
+			cityPath := t.TempDir()
+
+			buildDesiredStateWithSessionBeadsAt(
+				"test-city",
+				cityPath,
+				beaconTime,
+				decisionTime,
+				cfg,
+				runtime.NewFake(),
+				store,
+				nil,
+				snapshot,
+				nil,
+				io.Discard,
+			)
+
+			var replacement *sessionpkg.Info
+			for _, info := range snapshot.OpenInfos() {
+				if info.ID == asleepSessionID {
+					continue
+				}
+				infoCopy := info
+				replacement = &infoCopy
+				break
+			}
+			if replacement == nil {
+				// This tier plans no replacement session, so the invariant
+				// this test guards is vacuously satisfied.
+				return
+			}
+
+			// Claiming is pull-based: a replacement can only take work whose
+			// Assignee names one of its own identities, or unassigned work
+			// routed to its pool template. The work bead is re-read from the
+			// store so this checks what a claim would actually see.
+			claimed, err := store.Get(workID)
+			if err != nil {
+				t.Fatalf("re-reading work bead %s: %v", workID, err)
+			}
+			assignee := strings.TrimSpace(claimed.Assignee)
+			identities := sessionBeadAssigneeIdentitiesInfo(*replacement)
+			claimable := false
+			for _, identity := range identities {
+				if assignee != "" && assignee == identity {
+					claimable = true
+					break
+				}
+			}
+			if !claimable && assignee == "" {
+				routedTo := normalizeAgentTemplateIdentity(cfg, routedToOrLegacyWorkflowTarget(claimed))
+				claimable = routedTo != "" && routedTo == agent.QualifiedName()
+			}
+			if !claimable {
+				t.Fatalf("replacement session %s cannot claim its trigger work %s (assignee=%q, replacement identities=%v): demand-spawned replacement cannot claim its trigger work; it will drain no_work and respawn every tick",
+					replacement.ID, workID, claimed.Assignee, identities)
 			}
 		})
 	}
