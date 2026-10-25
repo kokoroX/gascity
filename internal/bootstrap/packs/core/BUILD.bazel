@@ -88,6 +88,7 @@ go_test(
         "pack_orders_test.go",
         "pack_polecat_continuation_group_test.go",
         "pack_polecat_findings_store_test.go",
+        "pack_prompt_bead_ids_test.go",
         "testenv_import_test.go",
     ],
     data = glob(
@@ -98,6 +99,7 @@ go_test(
     ],
     embed = [":core"],
     deps = [
+        "//examples/bd",
         "//internal/formula",
         "//internal/orders",
         "//internal/testenv",
