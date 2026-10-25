@@ -89,3 +89,14 @@ BSD `wc` pads its count with leading spaces, so a stub that spells a counter
 into a filename or compares it as a string pipes it through `tr -d ' '`, as
 `worker_env_notify_beads_test.go`'s gh stub and `check-go-format.sh` do.
 A count used only in a numeric `[ "$n" -gt N ]` test needs no trimming.
+
+## The Go format check runs offline
+
+`//:go_format_test` pins `GOPROXY=off` and `GOTOOLCHAIN=local` in its `env`.
+goimports starts `go list -m -e -json ...` once per `xargs` batch, and the
+test's `HOME` is a fresh `TEST_TMPDIR`: no module cache, no user `go env`
+file, no proxy variables. With network access to `proxy.golang.org`, every
+run downloads module metadata; without it, each batch waits for TCP connect
+timeouts (660s against a 300s limit on a macOS host whose only route out is a
+local proxy). Offline, resolution fails fast and goimports falls back to
+path-derived package names, giving the same result in about 30s.
