@@ -134,7 +134,7 @@ const notifyBeadsGHStub = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$GH_LOG"
 printf '%s\n' "${GH_TOKEN:-}" >>"$GH_TOKENS"
-n=$(wc -l <"$GH_LOG")
+n=$(wc -l <"$GH_LOG" | tr -d ' ')
 unexpected() { echo "$*" >>"$GH_DIR/unexpected"; echo "gh stub: $*" >&2; exit 2; }
 [ "${1:-}" = api ] || unexpected "not gh api: $*"
 shift
@@ -155,7 +155,9 @@ case "$method $endpoint" in
 "POST repos/"*/dispatches)
 	cp "$input" "$GH_DIR/dispatch.$n.json"
 	status=$(sed -n 1p "$GH_STATUSES")
-	sed -i 1d "$GH_STATUSES"
+	# Popped portably: GNU-only in-place sed makes BSD sed read the path as
+	# its script. No backticks here, the stub is a Go raw string literal.
+	tail -n +2 "$GH_STATUSES" >"$GH_STATUSES.next" && mv -f "$GH_STATUSES.next" "$GH_STATUSES"
 	if [ "$status" = none ]; then
 		echo "error connecting to api.github.com" >&2
 		exit 1
