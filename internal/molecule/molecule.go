@@ -38,6 +38,18 @@ type Options struct {
 	// correct before the recipe becomes visible to workers.
 	ExternalDeps []ExternalDep
 
+	// BlockedBy names already-existing bead IDs every recipe step must wait
+	// on. Each id becomes a "blocks" dependency on every step, written at
+	// create time, so the workflow carries the constraint before workers can
+	// see any of it. The caller is responsible for passing only ids its store
+	// can resolve: a dependency row naming an unresolvable id leaves the
+	// dependent step permanently not-ready, because the readiness reader can
+	// never see that blocker close.
+	//
+	// BlockedBy is shorthand for the ExternalDeps edges it expands to, and is
+	// cleared once expanded so the two cannot both be applied.
+	BlockedBy []string
+
 	// ParentID attaches the molecule to an existing bead. When set, the
 	// root bead's ParentID is set to this value.
 	ParentID string
@@ -866,6 +878,7 @@ func Instantiate(ctx context.Context, store beads.Store, recipe *formula.Recipe,
 	if err := refuseSessionSteps(recipe.Steps, applyVarDefaults(opts.Vars, recipe.Vars)); err != nil {
 		return nil, err // before any write: a refused recipe creates nothing
 	}
+	opts = expandBlockedBy(recipe, opts)
 	if !opts.nativeStepTopologyPrepared {
 		recipe = recipeWithNativeStepDependencies(recipe)
 		opts.nativeStepTopologyPrepared = true
@@ -1388,6 +1401,50 @@ func recipeParentDeps(deps []formula.RecipeDep) map[string]string {
 		}
 	}
 	return parents
+}
+
+// expandBlockedBy turns opts.BlockedBy into the equivalent "blocks" external
+// dependencies on every recipe step, then clears it so a second expansion
+// (Instantiate forwarding the same Options, for example) cannot duplicate the
+// edges. Blocks edges are deduplicated per (step, blocker); existing
+// ExternalDeps are carried through untouched.
+//
+// The edges are written at create time rather than by a follow-up update so
+// the workflow is never visible to a worker without its constraints.
+func expandBlockedBy(recipe *formula.Recipe, opts Options) Options {
+	if recipe == nil || len(recipe.Steps) == 0 || len(opts.BlockedBy) == 0 {
+		return opts
+	}
+	blockers := make([]string, 0, len(opts.BlockedBy))
+	for _, blockerID := range opts.BlockedBy {
+		if trimmed := strings.TrimSpace(blockerID); trimmed != "" {
+			blockers = append(blockers, trimmed)
+		}
+	}
+	opts.BlockedBy = nil
+	if len(blockers) == 0 {
+		return opts
+	}
+	seen := make(map[string]bool, len(recipe.Steps)*len(blockers))
+	for _, step := range recipe.Steps {
+		stepID := strings.TrimSpace(step.ID)
+		if stepID == "" {
+			continue
+		}
+		for _, blockerID := range blockers {
+			key := stepID + "\x00" + blockerID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			opts.ExternalDeps = append(opts.ExternalDeps, ExternalDep{
+				StepID:      stepID,
+				DependsOnID: blockerID,
+				Type:        "blocks",
+			})
+		}
+	}
+	return opts
 }
 
 func groupExternalDeps(deps []ExternalDep) (map[string][]ExternalDep, error) {

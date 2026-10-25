@@ -601,9 +601,19 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 			if err != nil {
 				return result, fmt.Errorf("instantiating %s %q on %s: %w", errLabel, formulaName, beadID, err)
 			}
+			// The source bead's own blockers constrain the workflow this
+			// launch is about to make claimable. Project them onto every step
+			// at create time; a blocker the workflow store cannot resolve is
+			// reported below instead of written as an edge that would wedge
+			// the step forever.
+			sourceBlockers, unprojectableBlockers, err := sourceBlockerIDs(deps, beadID)
+			if err != nil {
+				return result, fmt.Errorf("instantiating %s %q on %s: %w", errLabel, formulaName, beadID, err)
+			}
 			mResult, err := InstantiateSlingFormula(context.Background(), formulaName, searchPaths, molecule.Options{
 				Title:            opts.Title,
 				Vars:             formulaVars,
+				BlockedBy:        sourceBlockers,
 				PriorityOverride: BeadPriorityOverride(deps.Store, graphInv.InputConvoy),
 			}, "", opts.ScopeKind, opts.ScopeRef, a, deps, opts.Force)
 			if err != nil {
@@ -611,6 +621,9 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 			}
 			wfResult, wfErr := doStartGraphWorkflow(mResult.RootID, "", beadID, SlingMergeStrategy(opts.Merge, beadID, deps, a), a, method, deps)
 			wfResult.FormulaName = formulaName
+			if len(unprojectableBlockers) > 0 {
+				wfResult.BeadWarnings = append(wfResult.BeadWarnings, unprojectableBlockerWarning(beadID, mResult.RootID, unprojectableBlockers))
+			}
 			if wfErr != nil {
 				// Same store the snapshot was taken from and the replacement
 				// root was created in: a rollback that closed the replacement
@@ -1710,9 +1723,16 @@ func attachBatchFormula(ctx context.Context, opts SlingOpts, deps SlingDeps, chi
 		return result, nil
 	}
 	runGraph := func() (pendingSourceWorkflowLaunch, error) {
+		// Each batch child is its own source bead: the workflow it launches
+		// inherits that child's blockers, not the convoy's.
+		sourceBlockers, _, err := sourceBlockerIDs(deps, child.ID)
+		if err != nil {
+			return pendingSourceWorkflowLaunch{}, fmt.Errorf("instantiating %s %q on %s: %w", formulaLabel, formulaName, child.ID, err)
+		}
 		mResult, err := InstantiateSlingFormula(ctx, formulaName, SlingFormulaSearchPaths(deps, a), molecule.Options{
 			Title:            opts.Title,
 			Vars:             childVars,
+			BlockedBy:        sourceBlockers,
 			PriorityOverride: ClonePriorityPtr(child.Priority),
 		}, child.ID, opts.ScopeKind, opts.ScopeRef, a, deps)
 		if err != nil {
