@@ -425,9 +425,10 @@ func computePoolDesiredStatesAt(
 						Template:     template,
 						BeadPriority: beadPriorityRank(beadPriority(wb)),
 						Tier:         "wake-known-identity",
-						// SessionBeadID intentionally empty: the stale asleep
-						// bead must not be reused, so realizePoolDesiredSessions
-						// plans a clean create.
+						// SessionBeadID intentionally empty: the asleep bead is
+						// not resumed here. The realizer still routes the
+						// request to that bead, because it holds the work and
+						// pool seats claim work by pulling it.
 						WorkBeadID:     wb.ID,
 						WorkBeadTitle:  strings.TrimSpace(wb.Title),
 						WorkPack:       strings.TrimSpace(wb.Metadata[beadmeta.PackMetadataKey]),

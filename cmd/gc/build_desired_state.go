@@ -5143,10 +5143,47 @@ func selectOrCreatePoolSessionBead(
 	return info, plan.poolSlot, nil
 }
 
+// assignedWorkSessionOwner returns the open session bead that already holds
+// the work bead named by request, if any. Pool seats claim work by pulling
+// it, so only the holder can pick that work up; work that is closed or
+// unassigned has no holder.
+func assignedWorkSessionOwner(bp *agentBuildParams, request SessionRequest) (session.Info, bool) {
+	workBeadID := strings.TrimSpace(request.WorkBeadID)
+	if workBeadID == "" {
+		return session.Info{}, false
+	}
+	for _, wb := range bp.assignedWorkBeads {
+		if wb.ID != workBeadID {
+			continue
+		}
+		// Closed work has no holder.
+		if wb.Status != "open" && wb.Status != "in_progress" {
+			return session.Info{}, false
+		}
+		assignee := strings.TrimSpace(wb.Assignee)
+		// Unassigned work has no holder: any seat of the pool claims it
+		// through the pool template route.
+		if assignee == "" {
+			return session.Info{}, false
+		}
+		for _, info := range bp.sessionBeads.OpenInfos() {
+			for _, identity := range sessionBeadAssigneeIdentitiesInfo(info) {
+				if identity == assignee {
+					return info, true
+				}
+			}
+		}
+		return session.Info{}, false
+	}
+	return session.Info{}, false
+}
+
 // selectOrPlanPoolSessionBead performs the in-memory selection phase of pool
 // session provisioning. It returns one of:
 //   - reuse: (bead, slot, nil, nil) where bead is an existing session bead to
 //     reuse for this request.
+//   - reuse: when work is held by another open session of this template, that
+//     holder's row is reused for the request.
 //   - plan:  (zero bead, 0, *plan, nil) where plan describes a fresh bead to
 //     be materialized by executePlannedPoolSessionBeadCreate.
 //   - error: (zero bead, 0, nil, err) when selection fails (e.g., concrete
@@ -5193,6 +5230,27 @@ func selectOrPlanPoolSessionBead(
 			return *preferred, slot, nil, nil
 		}
 		info, err := normalizeNonExpandingPoolSessionInfoForSelection(bp, cfgAgent, *preferred)
+		return info, slot, nil, err
+	}
+	// Pool seats claim work by pulling it: neither an idle row reused below
+	// nor a seat created below could take work already assigned to another
+	// open session, so a started one would exit with no_work. Realize the
+	// request on the holder's own row instead, so the work's assignee is the
+	// session woken and no other row is bound to work it cannot claim.
+	if owner, ok := assignedWorkSessionOwner(bp, request); ok &&
+		!isNamedSessionInfo(owner) && !isFailedCreateSessionInfo(owner) &&
+		resolvedSessionTemplateInfo(owner, reuseTemplateConfig(bp)) == template {
+		if used[owner.ID] {
+			return owner, 0, nil, nil
+		}
+		slot := claimPreferredPoolSlotWithConfigInfo(bp.city, cfgAgent, owner, false, usedSlots)
+		if slot == 0 && !cfgAgent.UsesCanonicalSingletonPoolIdentity() {
+			return session.Info{}, 0, nil, fmt.Errorf("pool session %s holding work bead %s: concrete slot already claimed", owner.ID, request.WorkBeadID)
+		}
+		if isManualSessionInfoForAgent(owner, cfgAgent) {
+			return owner, slot, nil, nil
+		}
+		info, err := normalizeNonExpandingPoolSessionInfoForSelection(bp, cfgAgent, owner)
 		return info, slot, nil, err
 	}
 	if canonical, ok := findReusableCanonicalNonExpandingPoolSessionInfoForRequest(bp, cfgAgent, template, request, decisionTime, used); ok {
