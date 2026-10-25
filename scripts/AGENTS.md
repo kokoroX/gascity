@@ -73,3 +73,14 @@ checking anything. Linux CI cannot catch that. List files with
 `find -L <paths> -type f -print0 | xargs -0 grep -H ...` instead, as
 `check-eventexport-isolation.sh` (`grep_surface`) and
 `check-core-boundary.sh` check (f) do.
+
+## The Go format check runs offline
+
+`//:go_format_test` pins `GOPROXY=off` and `GOTOOLCHAIN=local` in its `env`.
+goimports starts `go list -m -e -json ...` once per `xargs` batch, and the
+test's `HOME` is a fresh `TEST_TMPDIR`: no module cache, no user `go env`
+file, no proxy variables. With network access to `proxy.golang.org`, every
+run downloads module metadata; without it, each batch waits for TCP connect
+timeouts (660s against a 300s limit on a macOS host whose only route out is a
+local proxy). Offline, resolution fails fast and goimports falls back to
+path-derived package names, giving the same result in about 30s.
