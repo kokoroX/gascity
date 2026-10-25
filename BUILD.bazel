@@ -30,7 +30,9 @@ exports_files([
 ])
 
 # gofumpt + goimports over every Go file, the formatters `make fmt-check`
-# runs through golangci-lint, pinned in MODULE.bazel.
+# runs through golangci-lint, pinned in MODULE.bazel. Offline: goimports runs
+# `go list -m` once per batch, and the test's fresh HOME has no module cache
+# or proxy settings (scripts/AGENTS.md).
 sh_test(
     name = "go_format_test",
     srcs = ["//scripts:check-go-format.sh"],
@@ -45,6 +47,10 @@ sh_test(
         "@cc_mvdan_gofumpt//:gofumpt",
         "@org_golang_x_tools//cmd/goimports",
     ],
+    env = {
+        "GOPROXY": "off",
+        "GOTOOLCHAIN": "local",
+    },
 )
 
 # `goreleaser check` over the release configuration (formerly ci.yml's
