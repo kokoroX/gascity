@@ -1495,6 +1495,12 @@ func currentPublishedOrRecoveredManagedDoltPort(cityPath string, allowRecovery b
 	return port, nil
 }
 
+var healthBeadsProviderForDoltRecovery func(context.Context, string, bool) error
+
+func init() {
+	healthBeadsProviderForDoltRecovery = healthBeadsProviderContext
+}
+
 func resolvedRuntimeCityDoltTarget(cityPath string, allowRecovery bool) (contract.DoltConnectionTarget, bool, error) {
 	return resolvedRuntimeCityDoltTargetContext(context.Background(), cityPath, allowRecovery)
 }
@@ -1502,6 +1508,16 @@ func resolvedRuntimeCityDoltTarget(cityPath string, allowRecovery bool) (contrac
 func resolvedRuntimeCityDoltTargetContext(ctx context.Context, cityPath string, allowRecovery bool) (contract.DoltConnectionTarget, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return contract.DoltConnectionTarget{}, false, err
+	}
+	// A provider-owned city bound to a foreign server leaves port discovery to
+	// bd. Managed recovery cannot supply its endpoint, including when a rig
+	// falls back to the city target.
+	if allowRecovery && cityUsesBdStoreContract(cityPath) && !scopeStoreLivesInTheCitysManagedDolt(cityPath, cityPath) {
+		if owned, err := cityScopeProviderOwned(cityPath); err == nil && owned {
+			if foreign, err := contract.ScopeMetadataNamesForeignDoltServer(fsys.OSFS{}, cityPath); err == nil && foreign {
+				allowRecovery = false
+			}
+		}
 	}
 	var managedRuntimeErr error
 	var recoveryErr error
@@ -1549,7 +1565,7 @@ func resolvedRuntimeCityDoltTargetContext(ctx context.Context, cityPath string, 
 		return contract.DoltConnectionTarget{Host: defaultManagedDoltHost, Port: port}, true, nil
 	}
 	if allowRecovery {
-		if err := healthBeadsProviderContext(ctx, cityPath, false); err == nil {
+		if err := healthBeadsProviderForDoltRecovery(ctx, cityPath, false); err == nil {
 			resetRecoveryCache()
 			if port := recoveredManagedDoltPort(); port != "" {
 				return contract.DoltConnectionTarget{Host: defaultManagedDoltHost, Port: port}, true, nil
