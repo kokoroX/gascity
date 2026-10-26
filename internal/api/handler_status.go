@@ -544,7 +544,13 @@ func (s *Server) countSessions(snapshot statusSessionSnapshot) (active, suspende
 type statusSessionSnapshot struct {
 	bySessionName map[string]statusSessionInfo
 	byTemplate    map[string][]statusSessionInfo
-	partialErrors []string
+	// sessionInfosByName and sessionInfosByID hold the same rows the
+	// bySessionName projection admits, keyed for the agent list's metadata
+	// lookup: by recorded session name and by session id. A caller resolving a
+	// session's provider and key reads these instead of a session-store row.
+	sessionInfosByName map[string]session.Info
+	sessionInfosByID   map[string]session.Info
+	partialErrors      []string
 }
 
 type statusSessionInfo struct {
@@ -564,8 +570,10 @@ func (s *Server) citySessionSnapshot(ctx context.Context, cfg *config.City) (sta
 	citySt, _ := suspensionstate.Load(fsys.OSFS{}, s.state.CityPath())
 	if suspensionstate.EffectiveCitySuspended(citySt, cfg.Workspace.EffectiveSuspendedOnStart()) {
 		return statusSessionSnapshot{
-			bySessionName: make(map[string]statusSessionInfo),
-			byTemplate:    make(map[string][]statusSessionInfo),
+			bySessionName:      make(map[string]statusSessionInfo),
+			byTemplate:         make(map[string][]statusSessionInfo),
+			sessionInfosByName: make(map[string]session.Info),
+			sessionInfosByID:   make(map[string]session.Info),
 		}, citySt, true
 	}
 	return s.statusSessionSnapshot(ctx), citySt, false
@@ -585,8 +593,10 @@ func (s *Server) citySessionSnapshot(ctx context.Context, cfg *config.City) (sta
 // local store.
 func (s *Server) statusSessionSnapshot(ctx context.Context) statusSessionSnapshot {
 	snapshot := statusSessionSnapshot{
-		bySessionName: make(map[string]statusSessionInfo),
-		byTemplate:    make(map[string][]statusSessionInfo),
+		bySessionName:      make(map[string]statusSessionInfo),
+		byTemplate:         make(map[string][]statusSessionInfo),
+		sessionInfosByName: make(map[string]session.Info),
+		sessionInfosByID:   make(map[string]session.Info),
 	}
 	sessions := s.state.SessionsBeadStore()
 	store := sessions.Store
@@ -680,6 +690,10 @@ func (s *Server) statusSessionSnapshot(ctx context.Context) statusSessionSnapsho
 		}
 		seenSessionName[info.sessionName] = true
 		snapshot.bySessionName[info.sessionName] = info
+		snapshot.sessionInfosByName[info.sessionName] = sessInfo
+		if id := strings.TrimSpace(sessInfo.ID); id != "" {
+			snapshot.sessionInfosByID[id] = sessInfo
+		}
 		if info.template != "" {
 			snapshot.byTemplate[info.template] = append(snapshot.byTemplate[info.template], info)
 		}

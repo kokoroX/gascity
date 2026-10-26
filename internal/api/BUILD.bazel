@@ -333,6 +333,7 @@ go_test(
         "handler_agents_configured_test.go",
         "handler_agents_control_dispatcher_test.go",
         "handler_agents_graph_work_test.go",
+        "handler_agents_list_session_read_test.go",
         "handler_agents_pool_liveness_test.go",
         "handler_agents_rig_template_test.go",
         "handler_agents_test.go",
