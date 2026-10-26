@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	workdirutil "github.com/gastownhall/gascity/internal/workdir"
+	"github.com/gastownhall/gascity/internal/worker"
 )
 
 const lookPathCacheTTL = 30 * time.Second
@@ -636,6 +638,75 @@ func (s *Server) enrichSessionMeta(resp *agentResponse, agentCfg config.Agent, q
 		return
 	}
 	sessionFile := transcriptState.path
+	if sessionFile == "" {
+		return
+	}
+	meta, err := factory.TailMeta(sessionFile)
+	if err != nil || meta == nil {
+		return
+	}
+	resp.Model = meta.Model
+	if meta.ContextUsage != nil {
+		resp.ContextPct = &meta.ContextUsage.Percentage
+		resp.ContextWindow = &meta.ContextUsage.ContextWindow
+	}
+	resp.Activity = meta.Activity
+}
+
+// agentListSessionEnricher fills model and context fields on one agent list
+// request's rows. It reads the request's session snapshot at most once
+// (shared with the session resolver) and builds the worker factory at most
+// once, only when a row needs enriching.
+type agentListSessionEnricher struct {
+	server   *Server
+	resolver *agentSessionResolver
+	factory  *worker.Factory
+	err      error
+	built    bool
+}
+
+// enrich populates resp's model and context usage fields from its transcript.
+// sessionName and sessionID are the row's own reads (the runtime session name
+// and its GC_SESSION_ID), so this makes no session-store read of its own.
+func (e *agentListSessionEnricher) enrich(resp *agentResponse, agentCfg config.Agent, qualifiedName, sessionName, sessionID, providerName string) {
+	if !e.built {
+		e.built = true
+		e.factory, e.err = e.server.workerFactory(e.server.state.SessionsBeadStore().Store)
+	}
+	if e.err != nil || e.factory == nil {
+		return
+	}
+	e.server.enrichSessionMetaFromInfo(resp, agentCfg, qualifiedName, sessionName, sessionID, providerName, e.resolver.sessionSnapshot(), e.factory)
+}
+
+// enrichSessionMetaFromInfo populates model and context usage fields on the
+// agent response by reading the tail of the agent's session JSONL file. It
+// resolves the session key and provider from the request's session snapshot,
+// looking the row's session up by name first and then, when the snapshot
+// records another name for it, by the row's session ID. It reads no
+// session-store row.
+func (s *Server) enrichSessionMetaFromInfo(resp *agentResponse, agentCfg config.Agent, qualifiedName, sessionName, sessionID, providerName string, snapshot statusSessionSnapshot, factory *worker.Factory) {
+	cfg := s.state.Config()
+	info, found := snapshot.sessionInfosByName[sessionName]
+	if !found && sessionID != "" {
+		info, found = snapshot.sessionInfosByID[sessionID]
+	}
+	sessionKey := ""
+	if found {
+		sessionKey = strings.TrimSpace(info.SessionKey)
+		providerName = agentTranscriptProvider(&info, providerName, cfg)
+	} else {
+		providerName = agentTranscriptProvider(nil, providerName, cfg)
+	}
+
+	workDir := s.resolveAgentWorkDir(agentCfg, qualifiedName)
+	if workDir == "" {
+		return
+	}
+	if abs, err := filepath.Abs(workDir); err == nil {
+		workDir = abs
+	}
+	sessionFile := factory.DiscoverTranscript(providerName, workDir, sessionKey)
 	if sessionFile == "" {
 		return
 	}

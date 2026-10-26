@@ -76,6 +76,7 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 	}
 	envBatch, _ := sp.(runtime.EnvironmentBatchProvider)
 	runtimeSessions := s.newAgentSessionResolver(ctx, cfg, cityName)
+	sessionEnricher := &agentListSessionEnricher{server: s, resolver: runtimeSessions}
 
 	var agents []agentResponse
 	var partialErrors []string
@@ -235,7 +236,7 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 			}
 
 			if running && provider == "claude" && canAttributeSession(a, ea.qualifiedName, cfg, s.state.CityPath()) {
-				s.enrichSessionMeta(&resp, a, ea.qualifiedName)
+				sessionEnricher.enrich(&resp, a, ea.qualifiedName, sessionName, sessionID, provider)
 			}
 
 			agents = append(agents, resp)

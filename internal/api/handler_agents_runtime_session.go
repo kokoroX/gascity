@@ -73,6 +73,13 @@ func (r *agentSessionResolver) partialErrors() []string {
 	return r.snapshot.partialErrors
 }
 
+// sessionSnapshot returns the request's session snapshot, reading it on first
+// use. It is the same at-most-once read resolve makes, so a caller that needs
+// the snapshot for a row's metadata shares it with session resolution.
+func (r *agentSessionResolver) sessionSnapshot() statusSessionSnapshot {
+	return r.sessions()
+}
+
 func (r *agentSessionResolver) sessions() statusSessionSnapshot {
 	if r.snapshot == nil {
 		snapshot := r.readSnapshot()
