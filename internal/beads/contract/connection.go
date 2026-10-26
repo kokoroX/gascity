@@ -954,20 +954,40 @@ func ScopeCarriesBdOwnedDirectBinding(fs fsys.FS, cityRoot, scopeRoot, issuePref
 	return resolved.Kind != ScopeConfigAuthoritative, nil
 }
 
+// ScopeMetadataNamesForeignDoltServer reports whether metadata names a direct
+// server outside gc's managed lifecycle, without requiring a persisted port.
+// Missing or malformed metadata reports false; this discovery does not resolve
+// an endpoint or read bd's runtime port file.
+func ScopeMetadataNamesForeignDoltServer(fs fsys.FS, scopeRoot string) (bool, error) {
+	data, err := fs.ReadFile(filepath.Join(scopeRoot, ".beads", "metadata.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	var meta struct {
+		Mode   string `json:"dolt_mode"`
+		Host   string `json:"dolt_server_host"`
+		Socket string `json:"dolt_server_socket"`
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return false, nil
+	}
+	return strings.EqualFold(strings.TrimSpace(meta.Mode), "server") &&
+		strings.TrimSpace(meta.Socket) == "" && doltHostNamesForeignServer(meta.Host), nil
+}
+
 // bindingNamesForeignServer reports whether a persisted binding points at a
 // server outside gc's managed lifecycle.
 func bindingNamesForeignServer(binding ConfigState) bool {
-	if strings.TrimSpace(binding.DoltSocket) != "" {
-		return false
-	}
-	host := strings.TrimSpace(binding.DoltHost)
-	if host == "" || strings.TrimSpace(binding.DoltPort) == "" {
-		return false
-	}
-	if DoltHostIsLocal(host) {
-		return false
-	}
-	return !strings.EqualFold(host, managedCityHost())
+	return strings.TrimSpace(binding.DoltSocket) == "" &&
+		strings.TrimSpace(binding.DoltPort) != "" && doltHostNamesForeignServer(binding.DoltHost)
+}
+
+func doltHostNamesForeignServer(host string) bool {
+	host = strings.TrimSpace(host)
+	return host != "" && !DoltHostIsLocal(host) && !strings.EqualFold(host, managedCityHost())
 }
 
 // bdExternalBindingTarget resolves the external upstream bd persisted for a

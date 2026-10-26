@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -237,6 +240,98 @@ func TestNoDoorErasesAProviderOwnedScopesUpstreamBinding(t *testing.T) {
 			}
 			if after["dolt_server_host"] != "db.example.com" || after["dolt_server_port"] != "4406" {
 				t.Fatalf("upstream binding erased from metadata bd owns: %v", after)
+			}
+		})
+	}
+}
+
+// Host-only external metadata leaves endpoint resolution to bd, including its
+// port file, without probing the city's managed Dolt lifecycle on every command.
+func TestBdRuntimeEnvProviderOwnedExternalHostRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		host          string
+		providerOwned bool
+		socket        string
+		managedStore  bool
+		noMetadata    bool
+		wantHealth    int
+	}{
+		{name: "provider-owned external host", host: "dolt", providerOwned: true},
+		{name: "local host", host: "127.0.0.1", providerOwned: true, wantHealth: 1},
+		{name: "non-provider-owned", host: "dolt", wantHealth: 1},
+		{name: "socket", host: "dolt", providerOwned: true, socket: "/var/run/dolt.sock", wantHealth: 1},
+		{name: "managed store", host: "dolt", providerOwned: true, managedStore: true, wantHealth: 1},
+		{name: "missing metadata", providerOwned: true, noMetadata: true, wantHealth: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearBdOwnedDirectCredsEnv(t)
+			city := t.TempDir()
+			writeCityTOMLForBdProvider(t, city)
+			t.Setenv("GC_BEADS", "bd")
+			writeScopeBeadsMetadata(t, city, fmt.Sprintf(`{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_server_host":%q,"dolt_server_socket":%q,"dolt_server_user":"root","dolt_database":"gc_hq"}`, tc.host, tc.socket))
+			if tc.noMetadata {
+				if err := os.Remove(filepath.Join(city, ".beads", "metadata.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(city, ".beads", "config.yaml"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(city, ".beads", "dolt-server.port"), []byte("13307\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.providerOwned {
+				journalCityScopeOwnership(t, city, city, providerScopeIntent{Transport: "direct", Target: "external"})
+			}
+			if tc.managedStore {
+				seedCityDatabaseDir(t, city, "gc_hq")
+				// A stopped publication is ownership evidence without a live port.
+				if err := writeDoltRuntimeStateFile(managedDoltStatePath(city), doltRuntimeState{Running: false}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if owned, err := cityScopeProviderOwned(city); err != nil || owned != tc.providerOwned {
+				t.Fatalf("cityScopeProviderOwned = (%v, %v), want (%v, nil)", owned, err, tc.providerOwned)
+			}
+
+			previous := healthBeadsProviderForDoltRecovery
+			t.Cleanup(func() { healthBeadsProviderForDoltRecovery = previous })
+			healthCalls := 0
+			healthBeadsProviderForDoltRecovery = func(_ context.Context, gotCity string, waitForScopes bool) error {
+				healthCalls++
+				if gotCity != city || waitForScopes {
+					t.Fatalf("health arguments = (%q, %v), want (%q, false)", gotCity, waitForScopes, city)
+				}
+				return errors.New("provider health unavailable")
+			}
+			wantEnv, err := bdRuntimeEnvWithErrorNoRecovery(city)
+			if err != nil {
+				t.Fatalf("bdRuntimeEnvWithErrorNoRecovery: %v", err)
+			}
+			env, err := bdRuntimeEnvWithError(city)
+			if err != nil {
+				t.Fatalf("bdRuntimeEnvWithError: %v", err)
+			}
+			if !reflect.DeepEqual(env, wantEnv) {
+				t.Errorf("env = %v, want unchanged env %v", env, wantEnv)
+			}
+			for _, key := range []string{"GC_DOLT_HOST", "GC_DOLT_PORT", "BEADS_DOLT_SERVER_HOST", "BEADS_DOLT_SERVER_PORT"} {
+				if env[key] != "" {
+					t.Errorf("env[%q] = %q, want no endpoint projection", key, env[key])
+				}
+			}
+			if healthCalls != tc.wantHealth {
+				t.Errorf("health calls = %d, want %d", healthCalls, tc.wantHealth)
+			}
+			if tc.wantHealth == 0 {
+				rig := filepath.Join(city, "rigs", "inherited")
+				if err := applyResolvedRigDoltEnvContext(t.Context(), map[string]string{}, city, rig, nil, true); err != nil {
+					t.Fatalf("rig fallback to city: %v", err)
+				}
+				if healthCalls != 0 {
+					t.Errorf("health calls after rig fallback = %d, want 0", healthCalls)
+				}
 			}
 		})
 	}

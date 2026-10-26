@@ -101,6 +101,45 @@ func TestScopeCarriesBdOwnedDirectBindingIgnoresTheManagedHostOverride(t *testin
 	}
 }
 
+func TestScopeMetadataNamesForeignDoltServer(t *testing.T) {
+	t.Setenv(ManagedCityHostEnv, "dolt.internal")
+	for _, tc := range []struct {
+		name     string
+		metadata string
+		want     bool
+	}{
+		{name: "host only", metadata: `{"dolt_mode":"server","dolt_server_host":"dolt"}`, want: true},
+		{name: "with port", metadata: `{"dolt_mode":"server","dolt_server_host":"dolt","dolt_server_port":3307}`, want: true},
+		{name: "normalized fields", metadata: `{"dolt_mode":" SERVER ","dolt_server_host":" db.example "}`, want: true},
+		{name: "socket", metadata: `{"dolt_mode":"server","dolt_server_host":"dolt","dolt_server_socket":"/var/run/dolt.sock"}`},
+		{name: "loopback", metadata: `{"dolt_mode":"server","dolt_server_host":"127.0.0.1"}`},
+		{name: "localhost", metadata: `{"dolt_mode":"server","dolt_server_host":"localhost"}`},
+		{name: "IPv6 loopback", metadata: `{"dolt_mode":"server","dolt_server_host":"[::1]"}`},
+		{name: "unspecified", metadata: `{"dolt_mode":"server","dolt_server_host":"0.0.0.0"}`},
+		{name: "managed host", metadata: `{"dolt_mode":"server","dolt_server_host":"DOLT.INTERNAL"}`},
+		{name: "missing host", metadata: `{"dolt_mode":"server"}`},
+		{name: "missing mode", metadata: `{"dolt_server_host":"dolt"}`},
+		{name: "proxied mode", metadata: `{"dolt_mode":"proxied-server","dolt_server_host":"dolt"}`},
+		{name: "missing metadata"},
+		{name: "malformed metadata", metadata: `{"dolt_mode":`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := fsys.NewFake()
+			const scope = "/city"
+			if tc.metadata != "" {
+				fs.Files[filepath.Join(scope, ".beads", "metadata.json")] = []byte(tc.metadata)
+			}
+			got, err := ScopeMetadataNamesForeignDoltServer(fs, scope)
+			if err != nil {
+				t.Fatalf("ScopeMetadataNamesForeignDoltServer: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ScopeMetadataNamesForeignDoltServer = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestValidateInheritedCityEndpointMirrorAcceptsBdOwnedDirectCity accepts inheritance without a gc endpoint mirror.
 func TestValidateInheritedCityEndpointMirrorAcceptsBdOwnedDirectCity(t *testing.T) {
 	fs := fsys.OSFS{}
