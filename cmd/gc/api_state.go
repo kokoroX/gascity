@@ -38,6 +38,7 @@ import (
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/packman"
 	"github.com/gastownhall/gascity/internal/pathutil"
+	"github.com/gastownhall/gascity/internal/processenv"
 	"github.com/gastownhall/gascity/internal/reconcilekey"
 	"github.com/gastownhall/gascity/internal/rig"
 	"github.com/gastownhall/gascity/internal/rollout"
@@ -704,7 +705,7 @@ func (cs *controllerState) openRigStore(provider, rigName, rigPath, prefix strin
 				}
 				return beads.OpenNativeStorage(ctx, scopeRoot, freshEnv)
 			}
-			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen), beads.WithNativeActor(os.Getenv("BEADS_ACTOR")))
+			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen), beads.WithNativeActor(processenv.BeadsActor()))
 		},
 	})
 	if err != nil {

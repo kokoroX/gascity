@@ -24,6 +24,7 @@ import (
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/pathutil"
+	"github.com/gastownhall/gascity/internal/processenv"
 	"github.com/gastownhall/gascity/internal/rollout/gate"
 	"github.com/gastownhall/gascity/internal/supervisor"
 	"github.com/gastownhall/gascity/internal/telemetry"
@@ -1921,7 +1922,7 @@ func openStoreResultAtForCityScoped(storePath, cityPath string, cfg *config.City
 				}
 				return beads.OpenNativeStorage(ctx, scopeRoot, freshEnv)
 			}
-			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen), beads.WithNativeActor(os.Getenv("BEADS_ACTOR")))
+			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen), beads.WithNativeActor(processenv.BeadsActor()))
 		},
 	})
 	if err != nil {

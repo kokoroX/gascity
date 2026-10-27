@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "processenv",
     srcs = [
+        "beads_actor.go",
         "envfile.go",
         "gcbin_path.go",
         "provider.go",
@@ -15,6 +16,7 @@ go_library(
 go_test(
     name = "processenv_test",
     srcs = [
+        "beads_actor_test.go",
         "envfile_test.go",
         "gcbin_path_test.go",
         "provider_test.go",
