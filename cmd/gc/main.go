@@ -1921,7 +1921,7 @@ func openStoreResultAtForCityScoped(storePath, cityPath string, cfg *config.City
 				}
 				return beads.OpenNativeStorage(ctx, scopeRoot, freshEnv)
 			}
-			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen))
+			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen), beads.WithNativeActor(os.Getenv("BEADS_ACTOR")))
 		},
 	})
 	if err != nil {

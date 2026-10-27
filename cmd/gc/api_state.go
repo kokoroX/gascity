@@ -704,7 +704,7 @@ func (cs *controllerState) openRigStore(provider, rigName, rigPath, prefix strin
 				}
 				return beads.OpenNativeStorage(ctx, scopeRoot, freshEnv)
 			}
-			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen))
+			return beads.OpenNativeDoltStoreAt(context.Background(), scopeRoot, env, beads.WithNativeReopen(reopen), beads.WithNativeActor(os.Getenv("BEADS_ACTOR")))
 		},
 	})
 	if err != nil {

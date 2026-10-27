@@ -92,8 +92,9 @@ func (p *workspaceProvider) OpenEngine(spec storebinding.BindingSpec, classes st
 // the store rather than the open, so the credential path's reopen keeps it.
 func (p *workspaceProvider) openWorkspace(spec storebinding.BindingSpec, classes storebinding.ClassSet) (workspaceEngine, error) {
 	fence := beads.WithNativeDoltStoreReservedIDPrefixes(storebinding.EngineReservedPrefixes(classes)...)
+	actor := beads.WithNativeActor(os.Getenv("BEADS_ACTOR"))
 	if spec.Provider != ProviderID || strings.TrimSpace(spec.URL) == "" || spec.Auth != storebinding.AuthCredentialProvider {
-		return beads.OpenNativeDoltStoreAtWithoutAmbientEnv(context.Background(), p.root, fence)
+		return beads.OpenNativeDoltStoreAtWithoutAmbientEnv(context.Background(), p.root, fence, actor)
 	}
 	executable, err := workspaceExecutable()
 	if err != nil {
@@ -113,7 +114,7 @@ func (p *workspaceProvider) openWorkspace(spec storebinding.BindingSpec, classes
 		return beads.OpenNativeStorageAtWithoutAmbientEnvWithCredentialCommand(ctx, p.root, command)
 	}
 	return beads.OpenNativeDoltStoreAtWithoutAmbientEnvWithCredentialCommand(
-		context.Background(), p.root, command, beads.WithNativeReopen(reopen), fence)
+		context.Background(), p.root, command, beads.WithNativeReopen(reopen), fence, actor)
 }
 
 // admit hands back an opened workspace this binding may serve from, and closes
