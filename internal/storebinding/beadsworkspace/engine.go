@@ -21,6 +21,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/processenv"
 	"github.com/gastownhall/gascity/internal/shellquote"
 	"github.com/gastownhall/gascity/internal/storebinding"
 )
@@ -92,7 +93,7 @@ func (p *workspaceProvider) OpenEngine(spec storebinding.BindingSpec, classes st
 // the store rather than the open, so the credential path's reopen keeps it.
 func (p *workspaceProvider) openWorkspace(spec storebinding.BindingSpec, classes storebinding.ClassSet) (workspaceEngine, error) {
 	fence := beads.WithNativeDoltStoreReservedIDPrefixes(storebinding.EngineReservedPrefixes(classes)...)
-	actor := beads.WithNativeActor(os.Getenv("BEADS_ACTOR"))
+	actor := beads.WithNativeActor(processenv.BeadsActor())
 	if spec.Provider != ProviderID || strings.TrimSpace(spec.URL) == "" || spec.Auth != storebinding.AuthCredentialProvider {
 		return beads.OpenNativeDoltStoreAtWithoutAmbientEnv(context.Background(), p.root, fence, actor)
 	}
