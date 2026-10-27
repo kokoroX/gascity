@@ -527,6 +527,17 @@ type NativeReopenFunc func(context.Context) (NativeStorage, error)
 // NativeDoltStoreOption configures a NativeDoltStore at open.
 type NativeDoltStoreOption func(*NativeDoltStore)
 
+// WithNativeActor sets the actor used for native store writes and new issues'
+// CreatedBy. Surrounding whitespace is trimmed; an empty actor leaves the
+// default actor ("gascity") unchanged.
+func WithNativeActor(actor string) NativeDoltStoreOption {
+	return func(s *NativeDoltStore) {
+		if actor := strings.TrimSpace(actor); actor != "" {
+			s.actor = actor
+		}
+	}
+}
+
 // WithNativeReopen injects the reconnect hook the read path uses to recover the
 // managed Dolt connection after a transient failure. The hook must re-resolve
 // the current managed port (the cached open env pins the old one) and return a
@@ -1367,6 +1378,7 @@ func (s *NativeDoltStore) applyGraphPlanOverCapInTransaction(ctx context.Context
 			}
 			issue := &beadslib.Issue{
 				Title:       node.Title,
+				CreatedBy:   s.actor,
 				Description: node.Description,
 				Status:      beadslib.StatusOpen,
 				Priority:    priority,
@@ -1533,6 +1545,7 @@ func (s *NativeDoltStore) create(b Bead, allowForeign bool) (Bead, error) {
 	if err != nil {
 		return Bead{}, err
 	}
+	issue.CreatedBy = s.actor
 	request, err := nativeCreateRequestFromIssue(s.actor, issue)
 	if err != nil {
 		return Bead{}, err
@@ -1944,6 +1957,7 @@ func (s *NativeDoltStore) applyCreateInTx(ctx context.Context, tx beadslib.Trans
 	if err != nil {
 		return Bead{}, err
 	}
+	issue.CreatedBy = s.actor
 	deps := cloneNativeDependencies(issue.Dependencies)
 	issue.Dependencies = nil
 	if err := tx.CreateIssue(ctx, issue, s.actor); err != nil {
@@ -3233,6 +3247,7 @@ func nativeGraphApplyBatchRequest(plan *GraphApplyPlan, actor string, ephemeral,
 		}
 		issue := &issueops.Issue{
 			Title:       node.Title,
+			CreatedBy:   actor,
 			Description: node.Description,
 			Status:      beadslib.StatusOpen,
 			Priority:    priority,

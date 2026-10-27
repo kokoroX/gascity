@@ -162,6 +162,7 @@ func (s *NativeDoltStore) nativeGuardedItems(ctx context.Context, storage beadsl
 			if err != nil {
 				return nil, fmt.Errorf("guarded batch item %d (%s): %w", idx, it.Create.ID, err)
 			}
+			issue.CreatedBy = s.actor
 			issue.RowVersion = 0
 			items = append(items, issueops.ApplyItem{
 				Kind:   issueops.ItemCreate,
