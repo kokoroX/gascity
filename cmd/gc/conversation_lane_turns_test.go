@@ -202,10 +202,13 @@ func (f *laneObsFixture) facts() []string {
 }
 
 // laneFactList lists conv's facts in store as kind:turn[@g<gen>][:reason
-// [:cause]], oldest first, naming the generation when it is not gen.
+// [:cause]], in the order they were written, naming the generation when it
+// is not gen. It reads in the store's own order, which for the tests'
+// MemStore is write order: created-at order is not, since one batch's facts
+// share a wall-clock created_at and a tie falls back to the content-keyed id.
 func laneFactList(t *testing.T, store beads.Store, conv string, gen int64) []string {
 	t.Helper()
-	rows, err := store.ListByLabel(opjournal.FactConversationLabel(conv), 0, beads.IncludeClosed)
+	rows, err := store.List(beads.ListQuery{Label: opjournal.FactConversationLabel(conv), IncludeClosed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +230,6 @@ func laneFactList(t *testing.T, store beads.Store, conv string, gen int64) []str
 		}
 		out = append(out, s)
 	}
-	slices.Reverse(out) // listed newest first
 	return out
 }
 
