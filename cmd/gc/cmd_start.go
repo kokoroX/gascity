@@ -623,6 +623,7 @@ func doStartWithNameOverrideJSON(args []string, controllerMode bool, stdout, std
 	if code := registerCityWithSupervisorNamed(cityPath, nameOverride, startStdout, stderr, "gc start", true); code != 0 {
 		return code
 	}
+	warnStage1MCPSkips(cityPath, exec.LookPath, stderr)
 	if jsonOut {
 		cityName := nameOverride
 		if entry, registered, err := registeredCityEntry(cityPath); err == nil && registered {
@@ -982,6 +983,10 @@ func doStartStandalone(args []string, controllerMode bool, stdout, stderr io.Wri
 		if frErr == nil {
 			recorder = fr
 			eventProv = fr
+			// Closed before the controller lock is released: Close lets the
+			// [events.mirror] copier catch up, so the mirror gets this run's
+			// last events, controller.stopped included.
+			defer fr.Close() //nolint:errcheck // best-effort at exit
 		}
 	}
 
@@ -1208,6 +1213,7 @@ func runStartWarmup(cityPath string, cfg *config.City, controllerLock *os.File, 
 		SkipManagedDoltCheck: managedDoltOpsCheckSkip(warmupCityPath, cfg, nil),
 		SkipRigDoltChecks:    skipRigDoltChecks,
 		SkipStorePreflight:   true,
+		Warmup:               true,
 	})
 	warmupOpts := warmup.WarmupOpts{
 		Checks: warmupChecks,

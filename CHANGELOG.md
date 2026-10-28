@@ -9,6 +9,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrading Notes
 
+- **The op journal now records session requests by default on a SQLite
+  sessions store.** The three `[ops]` rollout gates, `content` (submit,
+  messages, nudge, mail notify), `control` (interrupt, respond) and
+  `lifecycle` (wake, suspend, reset, kill, close), now default to `auto`
+  instead of `off`. Left unset, `auto` records only when the city's sessions
+  store writes to SQLite: a city whose sessions class is bound to a
+  `sqlite-beads` storage binding, such as a split city whose work stays on
+  Dolt. There each request is recorded as an op beside its unchanged legacy
+  execution, so a same-key retry is deduplicated across restarts and each
+  request gets one typed outcome. Delivered text is unchanged.
+  - **Natively served Dolt cities stop recording by default.** This
+    reverses the earlier unreleased default (#8325), under which a city
+    whose sessions store a Dolt server serves natively recorded every
+    request. A Dolt-served sessions store, native or through bd, now records
+    nothing under the default, whatever the bd on `PATH` supports, so a bd
+    that gains `--if-revision` does not start recording either. The check is
+    an allowlist of SQLite, so any other store (file, exec, memory) records
+    nothing too. Under the default such a store is treated as `off`: no CLI
+    warning, no `ops.recording_degraded` event, a `gc doctor` OK ("auto
+    (default) records nothing on a Dolt-served sessions store", and whether
+    an explicit gate could record there: a released bd cannot), one line in
+    the controller log, and no `bd update --help` capability probe on the
+    commands it would record. A run with `--key` still warns that it ran
+    unrecorded. The controller's op sweeper still closes expired ops an
+    earlier recording left behind, then goes idle.
+  - **Opting in on Dolt.** Set `content`, `control` and `lifecycle` to
+    `"auto"` (or `"require"`) in `[ops]`, or through `GC_OPS_CONTENT`,
+    `GC_OPS_CONTROL` and `GC_OPS_LIFECYCLE`. An explicit gate records over
+    any sessions store that can record ops (conditional writes and an id
+    prefix), Dolt included, and warns where the store cannot.
+  - **What recording costs on Dolt.** Recording adds two store writes per
+    request (open and close). In the X12 load test the added p50 latency on
+    the API's 202 path was about 8 ms on SQLite, and on a bd-provisioned
+    Dolt server read natively it went from about 145 ms with `off` to 313 to
+    318 ms (about +170 ms, 2.1x). Most of that is the beads
+    library's per-write cost on Dolt: an op create runs 38 SQL statements,
+    about half its time in two no-op `is_blocked` recomputes. Op rows are
+    already no-history: they land in bd's `dolt_ignore`d wisps table and
+    make no Dolt commits. The 208 KB per op the X12 Dolt arm reported is
+    chunk-journal garbage from a harness that turned Dolt auto-GC off; after
+    a GC about 1.4 to 3 KB per op is retained, and gc's managed Dolt server
+    runs auto-GC.
+  - **Opting out.** Set `content`, `control` and `lifecycle` to `"off"` in
+    `[ops]`. `GC_OPS_CONTENT`, `GC_OPS_CONTROL` and `GC_OPS_LIFECYCLE` set
+    to `off` also work, but they are break-glass overrides, which
+    `gc doctor` reports as a warning per gate. `require`, which refuses a
+    request it cannot record, stays opt-in.
+
+- **Dolt 2.6.0 or newer is now required.** `gc init` and `gc start` readiness,
+  `gc doctor`'s `dolt-version` check and the dolt pack's `check-dolt` doctor
+  now refuse a final Dolt below 2.6.0 (the floor was 2.1.0) and still refuse
+  every pre-release, naming the version found and the 2.6.0 they need. 2.6.0
+  is the first Dolt built with a Go toolchain that distrusts the compromised
+  eMudhra CA intermediates (https://emudhra.we-have-a-problem.com/), and the
+  Dolt that CI, the images and the rbe-west workers run. Upgrade with
+  `brew upgrade dolt` or from the
+  [Dolt releases](https://github.com/dolthub/dolt/releases), and upgrade a
+  shared Dolt server before the `gc` that uses it, backing it up first
+  (below).
+
+- **Dolt 2.6.0 is the pinned Dolt.** `deps.env`, the CI workflows'
+  `DOLT_VERSION` pins (macOS regression, nightly, RC Gate, Ollama,
+  fork-verify), the Bazel test Dolt (`dolt_bin_v2_6_0`), the agent base image
+  (`contrib/k8s/Dockerfile.base`, now built with Go 1.27.3, which Dolt 2.6.0
+  requires) and `contrib/k8s/dolt-statefulset.yaml` move from Dolt 2.2.0 to
+  2.6.0, the first Dolt release patched for the eMudhra CA distrust. Moving
+  from 2.2.0 to 2.6.0 crosses several behaviour changes (release notes for
+  [2.3.3](https://github.com/dolthub/dolt/releases/tag/v2.3.3),
+  [2.4.0](https://github.com/dolthub/dolt/releases/tag/v2.4.0),
+  [2.5.0](https://github.com/dolthub/dolt/releases/tag/v2.5.0) and
+  [2.6.0](https://github.com/dolthub/dolt/releases/tag/v2.6.0)):
+  - Since 2.3.3, the default `sql_mode` is MySQL 8.0 strict: it adds
+    NO_ZERO_IN_DATE, NO_ZERO_DATE and ERROR_FOR_DIVISION_BY_ZERO.
+  - Since 2.4.0, `INSERT ... ON DUPLICATE KEY UPDATE` needs the UPDATE
+    privilege, and several error codes match MySQL's.
+  - Since 2.5.0, one transaction may commit to several branches.
+  - In 2.6.0, `dolt_merge()` changes only for histories with more than one
+    merge base (criss-cross merges): like git, it now merges against a
+    virtual base built from them. Such a merge can report conflicts that
+    earlier releases resolved silently, and some spurious conflicts go away.
+
+  Rollback is not a downgrade. Once Dolt 2.3.3 or newer creates or alters a
+  schema with a descending index column (bd's schema has them), a Dolt below
+  2.3.3 can no longer write to that database (`table has unknown fields`).
+  Treat the upgrade as one-way: back up the data directory first; going back
+  means restoring that backup, not reverting the image.
+
+- **gc is now built with Go 1.27.3.** On macOS and Windows, a set
+  `SSL_CERT_FILE` or `SSL_CERT_DIR` now replaces the system trust store
+  (the keychain, the Windows certificate store) for gc's HTTPS connections,
+  as it already did on Linux. If you export either variable for other tools
+  and rely on a root that only the system store holds (a corporate or MDM
+  root, for example), add that root to the bundle or unset the variable for
+  `gc`. gc on macOS now needs macOS 13 (Ventura) or newer.
+
+- **An agent now starts without a shared MCP server its provider cannot
+  receive.** A server from the city's `mcp/` directory, a pack, or an
+  import reaches every agent in its scope. An agent whose provider cannot
+  receive it (an HTTP server for a `cursor` agent, any server for an agent
+  on a harness without MCP support, such as `copilot`) now starts without
+  it, with a warning. This changes #6661 for agents whose servers all come
+  from shared layers: such a `copilot` agent used to fail every session
+  start, and now starts without MCP. A server in the agent's own
+  `agents/<name>/mcp/` directory still keeps that agent from starting.
+  `gc start`, `gc reload`, `gc doctor` (`mcp-config`) and `gc mcp list
+  --agent <name>` ("Not projected") show which agents start without which
+  servers.
+
+- **An agent whose provider does not resolve no longer stops a city's MCP
+  projection.** With MCP servers in scope, an agent whose provider is not
+  installed, is not in the provider catalog (a typo), or is not set at all
+  failed `gc start` and the supervisor's city start for the whole city.
+  Stage 1 now skips that agent with a warning (`agent "x" cannot start:
+  ...`) and projects the rest of the city, which is how a city without MCP
+  servers already behaves. The agent's own session start still fails, and
+  `gc doctor` still reports it as an error. After installing a missing
+  provider, restart the city (`gc restart`).
+
+- **gc no longer takes over a provider-native MCP file that holds servers
+  its catalog does not define.** Such a file (a `.mcp.json`,
+  `.codex/config.toml`, `.gemini/settings.json`, `.cursor/mcp.json`,
+  `opencode.json` or `mimocode.json` at the city root, a rig root, or an
+  agent work dir) used to have its servers replaced the first time gc
+  projected MCP there, as did a file defining a server differently from the
+  catalog and an unparseable `.mcp.json`. Such a file is now left as it is,
+  with a warning, and the agents that read it start without gc's servers.
+  So are a file gc cannot read, a symlinked one, and another provider's file
+  gc cannot parse, which used to fail the start instead, and a file that is
+  not a regular file (a named pipe, a device) or is larger than 4 MiB, which
+  gc no longer reads at all. To let gc manage the file, define the servers
+  you still need in an `mcp/` catalog that reaches every agent reading it,
+  and remove the file's own entries. Files gc already manages are
+  unaffected.
+  - This includes the work dirs of pool and worktree sessions: sessions in
+    a checkout of a repository that commits its own `.mcp.json` (or another
+    provider file with servers of its own) now start without gc's servers.
+    The warning is in the controller log (`gc supervisor logs`) once gc
+    resolves a session whose work dir holds the file, once per agent, and
+    again when the file's content changes or the file comes back after gc
+    saw it gone.
+    `gc mcp list --session <id>` shows it as "Not delivered". The session's
+    own pre-start prints it too, but a runtime does not keep a successful
+    pre-start's output.
+  - The servers in a `.mcp.json` gc leaves alone now run in its Claude
+    agents, which gc starts with project MCP servers pre-approved, as they
+    already did in cities without an MCP catalog. Review a repository's MCP
+    config before adding it as a rig.
+  - gc's `.gitignore` entries now name only the files it projects, anchored
+    to the root that holds them (`/.mcp.json`), so a file of the same name
+    deeper in the repository is no longer ignored. Entries an earlier gc
+    wrote stay as they are and count as present, so an existing
+    `.gitignore` does not change.
+
 - **Restart agent sessions after upgrading gc so their `gc nudge poll`
   sidecars run the new binary.** The file nudge queue's lock now covers only
   its `state.json`: shadow-bead writes run after the lock is released, as
@@ -282,7 +435,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `option_defaults = { model = "gpt-5.5", effort = "xhigh" }`), or for one
   agent with the same `option_defaults` line in its `agent.toml` (#7944).
 
+- **`gc runtime request-restart` and a self `gc handoff` record a restart
+  only for the caller's own incarnation, and their exit codes change.** The
+  request is written to the session row first, and only while the row or the
+  session's live runtime carries the caller's `GC_INSTANCE_TOKEN`, so a
+  process left over from an earlier incarnation can no longer restart its
+  successor; a self `gc handoff` checks this before its mail and, refused
+  then, sends none. Both commands now exit 1 and record nothing when
+  `GC_INSTANCE_TOKEN` is not set. An agent CLI that scrubs `*TOKEN*`
+  variables from the shells it spawns (for example Claude Code with
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`) removes it, so keep that variable in
+  the agent's subprocess environment. They also exit 1 and record nothing
+  when the session store cannot compare-and-swap and the request needs it:
+  in a v2 city, and under `[beads] conditional_writes = "require"`.
+  `gc runtime request-restart` also exits 1 when the session store does not
+  open, where it used to set only the runtime's restart flag. Once the
+  request is recorded, a failed controller poke exits 0 with the warning
+  `restart recorded; controller not notified, it will act on its next pass`,
+  where it used to exit 1: the controller acts on the recorded request at
+  its next pass, so a script need not retry. An operator on the controller
+  host can still restart any session with `gc session reset <session>`.
+
 ### Added
+
+- **`[events.mirror]` writes a copy of the city's event log outside `.gc`**
+  for a log shipper that may not enter `.gc` (which gc keeps at `0700`). The
+  city's controller tails `.gc/events.jsonl` and appends every event line to
+  `path` (absolute, in an operator-provisioned directory gc never creates or
+  changes), with `mode` (default `0640`), renaming it to `<path>.1` at
+  `max_size_bytes` (default 100 MiB; `0` for external logrotate). It resumes
+  after the last event the mirror holds, and a failing mirror is reported at a
+  bounded rate and never blocks event recording. Unset, nothing changes. See
+  the "Ship the Event Log" runbook.
 
 - **`[beads] proxied_idle_timeout` sets how long a bd-owned proxied scope's
   proxy and Dolt child stay up with no connections.** bd retires the pair
@@ -316,6 +500,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   claim for different packs fails the add.
 
 ### Changed
+
+- **Go toolchain 1.27.3.** The `go.mod` floor, the Bazel `go_sdk`, the nogo
+  analyzers' module and the `contrib/k8s` Go build images move to Go 1.27.3,
+  the toolchain Dolt 2.6.0 and beads `main` build with. Building from source
+  now needs Go 1.27.3 or newer. The rbe-west worker host moves with it: its
+  workers install `go.mod`'s Go and, from rbe-worker `80d70774`, Dolt 2.6.0.
+  Contributors: a golangci-lint built with Go 1.26 refuses this module, which
+  breaks the pre-commit formatter. Rebuild it with Go 1.27.3:
+  `rm "$(go env GOPATH)/bin/golangci-lint" && make install-tools`.
+
+- **`gc init` pins the gastown pack to registry release 0.1.11.** Fresh
+  cities, `examples/gastown`, and the pinned-import examples in the docs now
+  use `sha:66c672b5ed00af143158b4eac960523c56b977ee`; the 0.1.10 pin
+  (`sha:33d3a430a67d`) is recorded as superseded, so `gc doctor` migrates
+  cities still pinned to it.
 
 - **A suspended rig or city is left cold.** gc no longer touches the bead
   store of a suspended rig, or of any scope of a suspended city. That covers
@@ -369,6 +568,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`gc prime --strict` fails on a `prompt_template` that does not render.**
+  A `.template.md` (or `.md.tmpl`) prompt_template that failed to parse or
+  execute, such as one calling an undefined function `{{base_branch}}`, was
+  reported on stderr while `gc prime --strict` printed the raw template text
+  and exited 0, so lint wrappers saw success. It now exits non-zero, prints
+  the render warnings and
+  `gc prime: prompt_template "<path>" for agent "<agent>": <error>` on
+  stderr, writes nothing to stdout, and in hook mode leaves the session's
+  `session_key` unset. Strict checks only the templates gc prime renders,
+  and stops at the agent whose prompt it prints, so a fallback agent from
+  `GC_TEMPLATE` that is never reached cannot fail it. Fragments appended to
+  the prompt (`global_fragments`, `inject_fragments`, `append_fragments`)
+  still only warn when missing or broken. Without `--strict` the raw-text
+  fallback is unchanged. (#8149)
+
+- **A rotation that stops after renaming the event log no longer hides its
+  events from the log's head or from a resuming watcher.** A rotation renames
+  `.gc/events.jsonl` to an `events.jsonl.rotating-*` file and then writes the
+  fresh log's first event; when that write fails (a full disk), the fresh log
+  stays empty until the next event. Meanwhile `gc events --seq` reported a
+  head below the rotated events, and a watcher resuming from a seq among
+  them, such as `gc events --follow --after <seq>`, skipped the rest. The
+  head now counts the rotating file, and a resume replays it, with or without
+  an active log.
+
+- **An MCP server one agent's provider cannot receive no longer stops the
+  city.** Servers from the city's `mcp/` directory, a rig pack, or an import
+  reach every agent in that scope. When one agent's provider could not
+  receive one of them, such as an HTTP server for a `cursor` agent (whose MCP
+  config carries only stdio servers), `gc start` and the supervisor failed the
+  whole city with `cursor MCP projection does not support http server`, and an
+  agent on a harness without MCP support, such as `copilot`, never started.
+  Gas City now leaves such a server out of that agent's MCP config, starts
+  the agent without it, and warns once, naming the agents, the servers and
+  the reason. A server in the agent's own `agents/<name>/mcp/` directory is
+  still an error for that agent, which does not start, while the rest of the
+  city does. Agents whose sessions use ACP receive every server in-band, as
+  `gc session new` already gave them. `gc mcp list` lists skipped servers
+  under "Not projected" (`skipped` in `--json`) instead of as projected, and
+  `gc start`, `gc reload`, `gc doctor`, `gc config show` and `gc import add`
+  warn about skipped servers and agents that cannot start. Under a
+  supervisor, `gc start` and `gc reload` work the warnings out on the
+  invoking shell's `PATH`, which can differ from the supervisor's; the
+  supervisor log is authoritative.
+
+- **A config reload now projects MCP config.** Stage-1 MCP projection ran
+  only when a city started, so a server added or changed in a running city
+  drained the agents it reached and restarted them against their old
+  scope-root config. It now also runs on every applied config reload,
+  before that tick's restarts.
+
+- **An agent whose provider does not resolve no longer stops the city when
+  MCP servers are in scope.** Every provider a city declares has an implicit
+  agent, and that agent inherits the city's MCP servers. When one declared
+  provider's binary was missing, such as one `gc init` wrote to `city.toml`
+  that was never installed, `gc start` and the supervisor failed the whole
+  city with `agent "codex": provider not found in PATH`; so did an agent
+  whose provider is not in the catalog or not set. Stage 1 now skips that
+  agent with a warning and projects the rest of the city; the agent's own
+  session start still reports the provider. Stage-1 warnings now name their
+  city, and name an implicit agent with its provider.
+
+- **gc no longer replaces a project's own MCP servers.** With any MCP server
+  in scope, gc took over each provider-native MCP file it projected into:
+  at the city root and every rig root when the city started, and in an
+  agent's own work dir when its session started. It replaced the file's
+  servers with the catalog's, so a rig repository's committed `.mcp.json`
+  lost its team servers (the original was saved under `.gc/mcp-adopted/`),
+  and they silently stopped working. gc now leaves a file alone when
+  adopting it would drop content it does not manage, as listed under
+  Upgrading Notes. It warns which agents start without gc's servers there,
+  once until the file's content changes or the refusal clears; for a
+  session's own work dir, the warning comes from the controller, since a
+  session's pre-start output is not kept. A parse error names the line and
+  column only, never the file's text, which can hold a secret.
+  `gc start --dry-run`, `gc mcp list` ("Not delivered"), and the new
+  `mcp-adoption` doctor check show these files. The doctor check also lists
+  files an earlier gc took over while they held servers the catalog still
+  does not define, and where their definitions are saved. A provider MCP
+  file that is a symlink, such as a `.cursor/mcp.json` linked to
+  `.mcp.json`, no longer fails the start of a city whose agents use that
+  provider, with or without MCP servers in scope, and an empty Gemini,
+  Cursor, OpenCode, or MiMo Code settings file no longer fails projection.
+
 - **`gc start --dry-run` no longer rewrites MCP config, skill links, or
   `.gitignore` in the city and its rigs.** The preview ran the stage-1
   passes for real while printing "No side effects executed": it adopted
@@ -390,6 +673,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directories under `.gc/` (`cache`, `system`, `runtime`, and an empty
   `events.jsonl`) when they are missing. Its footer now says so, in place of
   "No side effects executed".
+
+- **`jsonl-export` no longer stops every export when the archive's loose-object
+  backlog is too large to pack within the order's timeout (#6573).** The run
+  now exports, commits and pushes first, then packs the archive, so a pack
+  that fails or times out can no longer hold back snapshots. The pass is an
+  incremental `git repack --geometric=2` (Git 2.32 or newer) that packs the
+  backlog and postpones rewriting a large existing pack, instead of a `git gc`
+  that rewrote the whole archive. It also runs on the "no changes" and
+  pending-push exits, keeps the largest pack when free space is short, stops
+  Git's own auto-maintenance from running during the archive commit, and
+  prints a one-line `archive maintenance:` summary. Geometric packing
+  postpones the full rewrite; run `git gc` on the archive by hand when
+  `packs_after` or `pack_kb_after` keeps growing. See the troubleshooting
+  guide's "Archive object maintenance".
 
 - **The core `orphan-sweep` order times out a minute before its next run is
   due.** The order declared no timeout, so it ran under the 300s exec

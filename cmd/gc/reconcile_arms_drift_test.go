@@ -50,9 +50,11 @@ func TestDecideRowConfigDrift(t *testing.T) {
 		pending, work    bool
 		relaunch         bool
 		alive, undesired bool
+		unresolved       bool
 		wantKind         string
 		wantReason       string
 	}{
+		{name: "an unresolved named template keeps its running config", meta: append([]string{"started_config_hash", stale}, named...), alive: true, unresolved: true},
 		{name: "a drift drains", meta: []string{"started_config_hash", stale}, alive: true, wantKind: intentDrainBegin, wantReason: decideDrainBegin + drainConfigDrift},
 		// The begin is idempotent (the A14 generator's shifted seed 296): a
 		// drained row whose own runtime came back carries this incarnation's
@@ -116,6 +118,9 @@ func TestDecideRowConfigDrift(t *testing.T) {
 				}
 				w.Env = &reconcileEnv{Cfg: &config.City{Agents: []config.Agent{{Name: "worker"}}}, SP: sp}
 				w.Templates = &templateMemo{entries: map[templateMemoKey]templateResolution{templateMemoKeyOf(info): {TP: tp}}}
+				if tc.unresolved {
+					w.Templates.entries[templateMemoKeyOf(info)] = templateResolution{Err: errors.New("unresolved start config")}
+				}
 				w.Observed = map[rowKey]rowObservation{rowKeyOf("gc-1"): {Liveness: livenessAlive, Attached: tc.attached, Uncertain: tc.unsure}}
 			})
 			drift := slices.Contains([]string{decideDriftAttached, decideDriftPinned, decideDriftResolved, decideDrainBegin + drainConfigDrift, decideDriftRepair, decideLiveApply, decideDriftRestart, decideDriftRelaunch}, it.Reason)

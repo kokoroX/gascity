@@ -86,8 +86,9 @@ cannot. Such a stub is a Go raw string literal, so nothing in it — a
 comment included — may contain a backtick.
 
 BSD `wc` pads its count with leading spaces, so a stub that spells a counter
-into a filename or compares it as a string pipes it through `tr -d ' '`, as
-`worker_env_notify_beads_test.go`'s gh stub and `check-go-format.sh` do.
+into a filename or compares it as a string normalizes it with arithmetic
+expansion, as `worker_env_notify_beads_test.go`'s gh stub does, or pipes it
+through `tr -d ' '`, as `check-go-format.sh` does.
 A count used only in a numeric `[ "$n" -gt N ]` test needs no trimming.
 
 ## The Go format check runs offline
@@ -100,3 +101,18 @@ run downloads module metadata; without it, each batch waits for TCP connect
 timeouts (660s against a 300s limit on a macOS host whose only route out is a
 local proxy). Offline, resolution fails fast and goimports falls back to
 path-derived package names, giving the same result in about 30s.
+
+## The tmux test inventory is derived, never counted
+
+The `internal/runtime/tmux` integration inventory is `scripts/runtime-tmux-tests.manifest`
+(every test name, in discovery order) plus `scripts/runtime-tmux-integration-files.manifest`
+(the `_test.go` files that compile only with `-tags integration`, one basename
+per line, ascending). Both are admin-gated through CODEOWNERS `/scripts/`.
+`scripts/runtime_tmux_manifest_test.go` and `scripts/runtime_tmux_lane_test.go`
+derive their expectations from the source tree, so never type an inventory
+count (total, default-lane, integration-only, or per-shard) into a test: two
+PRs that each add a test would conflict on it. Adding a test costs manifest
+lines only; a new integration-only test file costs one sorted record line.
+The shard rule is `i % shard_total == shard_index - 1` in
+`scripts/test-go-test-shard` (`TestRuntimeTmuxIntegrationShardUsesCheckedManifestOnLinux`
+restates it and runs each shard through the real script).
