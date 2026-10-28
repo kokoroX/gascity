@@ -479,3 +479,14 @@ func TestBazelMultiLaneLanesHashLikePrePush(t *testing.T) {
 		}
 	}
 }
+
+// Formatting needs no module downloads, including under a fresh test HOME.
+func TestGoFormatTargetRunsOffline(t *testing.T) {
+	build := readFile(t, repoRoot(t), "BUILD.bazel")
+	rule := regexp.MustCompile(`(?ms)^sh_test\(\n    name = "go_format_test",\n.*?^\)`).FindString(build)
+	for _, want := range []string{`"GOPROXY": "off"`, `"GOTOOLCHAIN": "local"`} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("go_format_test must pin %s", want)
+		}
+	}
+}

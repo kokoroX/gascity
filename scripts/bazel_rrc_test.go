@@ -579,7 +579,7 @@ i=$((n - 1)); [ "$i" -lt "${#answers[@]}" ] || i=$((${#answers[@]} - 1))
 answer=${answers[$i]}
 key="$BAZEL_CI_SECRET_DIR/rrc-writer.key" cn=rbe-rrc-writer endpoint=grpcs://rbe-west.ops.gascity.com:443 instance=oss
 case "$answer" in
-ok | cn | endpoint | instance | otherkey | nocert) ;;
+ok | libressl | cn | endpoint | instance | otherkey | nocert) ;;
 000) echo "curl: (7) Failed to connect" >&2; exit 7 ;;
 *) printf '{"error": "stub %s"}' "$answer" >"$out"; printf '%s' "$answer"; exit 0 ;;
 esac
@@ -610,6 +610,10 @@ func TestRRCWriterCredential(t *testing.T) {
 			t.Skipf("%s not on PATH", tool)
 		}
 	}
+	realOpenSSL, err := exec.LookPath("openssl")
+	if err != nil {
+		t.Fatal(err)
+	}
 	script := filepath.Join(repoRoot(t), bazelRRCCredential)
 	for _, c := range []struct {
 		answers string
@@ -617,6 +621,7 @@ func TestRRCWriterCredential(t *testing.T) {
 		mints   int
 	}{
 		{"ok", true, false, 1},
+		{"libressl", true, false, 1},
 		{"429 ok", true, false, 2},
 		{"502 ok", true, false, 2},
 		{"000 ok", true, false, 2},
@@ -637,7 +642,14 @@ func TestRRCWriterCredential(t *testing.T) {
 		if err := os.MkdirAll(bin, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		for name, body := range map[string]string{"curl": rrcMintCurlStub, "sleep": "#!/bin/sh\nexit 0\n"} {
+		for name, body := range map[string]string{"curl": rrcMintCurlStub, "sleep": "#!/bin/sh\nexit 0\n", "openssl": `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$RBE_TEST_MINT" == libressl && "$*" == *"-nameopt RFC2253"* ]]; then
+    "$RBE_TEST_OPENSSL" "$@" | sed 's/^subject=/subject= /'
+else
+    exec "$RBE_TEST_OPENSSL" "$@"
+fi
+`} {
 			if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -652,6 +664,7 @@ func TestRRCWriterCredential(t *testing.T) {
 			"ACTIONS_ID_TOKEN_REQUEST_URL":   "https://token.invalid/oidc?api-version=2.0",
 			"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
 			"RBE_TEST_MINT":                  c.answers,
+			"RBE_TEST_OPENSSL":               realOpenSSL,
 			"RBE_TEST_MINT_LOG":              mintLog,
 		})
 		if (err == nil) != c.ok {

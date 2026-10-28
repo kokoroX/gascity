@@ -8,13 +8,12 @@ import (
 )
 
 // shortHome points socketPath()'s config-dir resolution at a short, isolated
-// temp dir so these tests never touch the real user's herdr sessions. It sets
-// both $XDG_CONFIG_HOME, which os.UserConfigDir() consults first on Linux
-// (see socketPath's doc comment), and $HOME, which it alone uses on macOS
-// (~/Library/Application Support). The default t.TempDir() (/var/folders/…
-// on macOS, Bazel's per-test tmpdir) blows past the 104-byte unix-socket
-// sun_path limit once socketPath() appends herdr/sessions/<name>/herdr.sock,
-// so we root under /tmp instead.
+// temp dir via $XDG_CONFIG_HOME — the env var socketPath() consults
+// before $HOME (see socketPath's doc comment) — so these tests never touch
+// the real user's ~/.config/herdr/sessions/. The default t.TempDir()
+// (/var/folders/… on macOS) blows past the 104-byte unix-socket sun_path
+// limit once socketPath() appends herdr/sessions/<name>/herdr.sock, so we
+// root under /tmp instead.
 func shortHome(t *testing.T) {
 	t.Helper()
 	configHome, err := os.MkdirTemp("/tmp", "hdr")
@@ -24,6 +23,28 @@ func shortHome(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(configHome) })
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	t.Setenv("HOME", configHome)
+}
+
+func TestShortHomeKeepsBothSocketRulesIsolated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	shortHome(t)
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	want := filepath.Join(configHome, "herdr", "sessions", "isolated", "herdr.sock")
+	if got := newClient("isolated", "").socketPath(); got != want {
+		t.Fatalf("XDG socket = %q, want isolated path %q", got, want)
+	}
+
+	if err := os.Unsetenv("XDG_CONFIG_HOME"); err != nil {
+		t.Fatal(err)
+	}
+	want = filepath.Join(configHome, ".config", "herdr", "sessions", "isolated", "herdr.sock")
+	got := newClient("isolated", "").socketPath()
+	if got != want {
+		t.Fatalf("HOME fallback socket = %q, want isolated path %q", got, want)
+	}
+	if len(got) >= 104 {
+		t.Fatalf("isolated socket path has %d bytes; must stay below 104", len(got))
+	}
 }
 
 // A stale socket inode — left by a herdr server that exited uncleanly — must not

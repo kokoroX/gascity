@@ -526,7 +526,11 @@ endpoints, credentials, timeouts, download and parallelism policy.
   contributors and fork PRs read. Fork PRs get `rbe-fork` remote execution
   with a certificate minted for that run, or, when the mint is closed or
   refuses, the read-only cache with execution on the runner; either way
-  every lane runs and gates.
+  every lane runs and gates. A fork repository's own CI (a push to your
+  fork, or a PR within it: `github.repository_owner` is not `gastownhall`)
+  runs in mode `local`, executing on the runner without rbe-cache, so it
+  never spends the farm's anonymous-cache budget; your PRs into gascity are
+  unaffected.
 
 **Pre-push.** `.githooks/pre-push` runs the suite through
 `.githooks/lib/push-suite.sh` when a push changes Go sources. Mode by
@@ -683,6 +687,17 @@ rules above), and `rbe` fails the push. Rebase onto main to execute
 remotely again; a change that moves the pin runs its remote suite in CI
 after it merges, as `bazel.yml`'s own preflight does.
 
+In CI, `bazel.yml`'s lanes tell the two reasons a checkout's pin differs
+from main's apart. A change that moves the pin skips its remote suite, as
+above. A pull request run whose base predates a re-pin does not move the
+pin: the run chose its base commit (`base-sha`) before main re-pinned, and
+"Re-run failed jobs" keeps that base. A remote lane on it fails its
+`worker-env` preflight with `rbe worker-env stale base`, because no pool
+worker serves its pin; **Re-run all jobs** (not "Re-run failed jobs") or push
+a commit, either of which resolves a fresh base. A lane that is not remote
+runs, and push, schedule and dispatch runs, which have no `base-sha`, keep
+the skip.
+
 ### Remote repo contents cache (CI lanes)
 
 A cold lane client spends 15-38 s re-running repository rules (go_deps,
@@ -708,7 +723,8 @@ does not reach the fork-cache lanes below.
 Lanes on the read-only fork cache (mode `cache`) see no repository
 variables. Mode `cache` covers fork PRs without an rbe-fork certificate,
 `rbe=cache` dispatches, and, while `RBE_WEST_WORKERS` is not `true`, every
-PR, push and merge group (`bazel.yml`'s rbe job). They read the same
+PR, push and merge group (`bazel.yml`'s rbe job), never a fork
+repository's own CI (mode `local`). They read the same
 entries through rbe-cache's anonymous AC and CAS reads, with the same two
 lines, whenever `tools/rbe/cache-rrc-probe.sh` gets a GetCapabilities
 answer from rbe-cache, then NOT_FOUND for a GetActionResult key no action
@@ -773,17 +789,14 @@ pin" below). An action runs only on a worker whose toolchain is the pinned
 one. gastownhall/beads shares the pools and carries a byte-identical copy of
 the manifest and the same pin.
 
-The pool workers also advertise `worker-env-base`, the sha256 of the
-manifest without its `go` and `dolt` lines, but only while action isolation
-is on (rbe-reexecution-design.md (c)). beads' actions send `worker-env-base`
-alone: beads builds with its own `go_sdk` and tests with a hermetic dolt, and
-rbe-west's action launcher hides the host's go and dolt from such an action
-(exit 127). So a gascity re-pin that moves only the `go` or `dolt` line
-leaves every beads key, and beads' pin, unchanged. gascity's platform keeps
-the full `worker-env` (`scripts/rbe_worker_env_base_policy_test.go`): its
-tests run the host go and dolt. To see whether a re-pin moves beads too,
-compare `grep -v -E '^(go|dolt) ' tools/rbe/worker-env.txt | sha256sum`
-before and after.
+beads' actions send the full `worker-env` too, so every re-pin moves
+beads' pin. (rbe-reexecution-design.md (c) has the pool workers also
+advertise `worker-env-base`, the manifest without its `go` and `dolt`
+lines, for beads alone; rbe-worker reverted it before any gascity pin
+carried it, rbe-worker#7, until it can canary.) gascity's platform keeps the
+full `worker-env` (`scripts/rbe_worker_env_base_policy_test.go`): its tests
+run the host go and dolt. A re-pin that moves only the `go` line gets a
+grace window for beads ("Grace window for Go re-pins" below).
 
 The manifest records what can change an action's result, and nothing else.
 We don't control the Blacksmith image, and it takes Ubuntu security updates
@@ -834,6 +847,9 @@ rbe-worker for the pools and the canary; gascity's own
   issue open until the re-pin lands.
 - While the issue is open, remote `bazel.yml` runs on its pin fail at
   their preflight instead of queueing.
+- Pull request runs whose base predates the re-pin fail their remote
+  lanes at the preflight with "rbe worker-env stale base" once it merges;
+  they want Re-run all jobs, not Re-run failed jobs.
 - `rbe-worker-env-canary.yml` measures a Blacksmith runner every six
   hours, so drift usually opens the issue before CI meets it.
 - A change to the worker host (`tools/rbe/worker-env.txt`,
@@ -869,7 +885,8 @@ To re-pin, anyone with write access:
 
 Once main's pin moves, beads' copy is out of step, and every beads PR
 fails at `Bazel / execution mode` (its preflight compares the copy with
-gascity's main) until beads' sync PR lands. While a PR moves the pin,
+gascity's main) until beads' sync PR lands, unless the re-pin moved only
+the Go ("Grace window for Go re-pins" below). While a PR moves the pin,
 `worker-env-notify-beads-pr.yml` keeps one comment on it saying so. On the
 push that merges it, `worker-env-notify-beads.yml` sends gastownhall/beads
 the repository dispatch `gascity-worker-env-repinned` (the main commit and
@@ -896,6 +913,65 @@ re-pin.
 If an issue stays open for the current pin while hosts match again,
 close it by hand.
 
+### Grace window for Go re-pins
+
+A re-pin that moves only the manifest's `go` line (a Go release: gascity#7387
+and #8165 left beads red for 99 and 89 minutes) can be undone on today's
+Blacksmith image, because the pinned rbe-worker installs `go.mod`'s Go. So
+after such a re-pin beads' preflight accepts the previous pin for two hours,
+rbe-west serves it for about three (the last hour for the beads runs it
+accepted near the end), and beads keeps building until its sync PR lands:
+
+1. On the push that moves the pin, `worker-env-notify-beads.yml`'s `grace`
+   job writes a record (`tools/rbe/worker-env-grace record`) and commits it
+   as `worker-env-grace.txt` to the branch `rbe/worker-env-grace`
+   (`publish`, with GITHUB_TOKEN's `contents: write`). It holds the previous
+   pin, its Go, `since` (the re-pin commit's time; a merge-queue commit is
+   made a few minutes before it lands), `until` (`since` + 2 h) and
+   `serve-until` (`until` + 1 h). Any other re-pin (an image release, a dolt
+   or measurement change, a manifest that does not hash to its pin) gets
+   `previous none` and a reason: the old host cannot be rebuilt, so beads
+   waits for its sync PR as before. The previous pin is that of main before
+   the push (`github.event.before`), never of the pushed commit's parent: in
+   a merge-queue group the two differ. If main before the push cannot be
+   fetched, the job fails and publishes nothing (re-run it). `publish`
+   writes only a record for the pin main has when it runs, and not one the
+   branch already has, so a re-run, or two re-pins in a row, never puts an
+   older record back. The branch's history is the history of windows.
+2. rbe-west's OSS pool scaler reads the record and, while the window is
+   open, dispatches `rbe-worker-legacy.yml`: a floor of previous-pin workers
+   until `until`, and more while a queue persists that no registered
+   current-pin worker can take, until `serve-until` (infra
+   `nativelink-cas/west`, README "Pool scalers: worker-env grace window").
+   Each run fetches the record (`fetch`), writes this main's manifest with
+   the previous Go as the product files the rbe-worker reads (`host`),
+   refuses unless they hash to the previous pin, measures its host against
+   that pin (a host that measures anything else fails and never registers)
+   and serves the previous pin until idle, max age or about `serve-until`.
+   A run dispatched with no open window fails too, and the scaler's breaker
+   for these runs stops dispatching them. It runs the same pinned
+   rbe-worker as the pool. NativeLink keeps one value per platform property
+   per worker, and a host has one Go, so previous-pin workers are separate
+   VMs.
+3. beads' preflight (its `tools/rbe/worker-env-sync`, `bazel.yml`'s
+   `execution mode`) reads the record from the same branch and, in mode
+   `remote` while the beads repository variable `RBE_WORKER_ENV_GRACE` is
+   `true`, accepts beads' pin from `since` (less 5 minutes of clock skew)
+   until `until` when it is the record's previous pin, gascity main's pin is
+   the record's pin, and the two manifests differ only in the `go` line.
+   beads' sync PR still opens and lands as before; its own CI runs on the
+   new pin.
+
+The record is the one contract between the three: printable ASCII, one
+`key value` per line, the same strict rules in each reader; change it in
+all of them. The two hours are part of it (the scaler and beads refuse a
+longer window): they cover beads' sync PR (about an hour) with room to
+spare, but not a sync PR whose release lane times out (90 minutes) and
+re-runs, after which beads goes red until the sync lands, as before.
+Rollback: unset `RBE_WORKER_ENV_GRACE` in beads (strict again at once), and
+set `NLPOOL_GRACE_WORKFLOW` empty on rbe-west (no previous-pin workers).
+With neither, records go on being published and nothing reads them.
+
 ### Bumping the rbe-worker pin
 
 The worker code the pools run (`blacksmith-worker.sh`, `worker-env`, the
@@ -903,7 +979,7 @@ farm half of `worker-env-drift` and the `rbe-action-*` launcher) lives in
 [`gastownhall/rbe-worker`](https://github.com/gastownhall/rbe-worker)
 under `worker/`, with its own tests. gascity keeps no copy. Its pool and
 canary workflows (`rbe-worker-pool.yml`, `rbe-fork-pool.yml`,
-`rbe-worker-env-canary.yml`) are shims: each job fetches the commit named in
+`rbe-worker-legacy.yml`, `rbe-worker-env-canary.yml`) are shims: each job fetches the commit named in
 `.github/actions/rbe-worker/pin` anonymously, from `refs/heads/main` only,
 verifies that the commit is in main's history, and runs `worker/` from it.
 gascity keeps only the product side of the contract: `go.mod`,
@@ -1462,6 +1538,7 @@ all-source audit while staying outside untagged and Small debt.
 | Medium owner | `internal/session` package `session` | TestRuntimeLeaseCrossProcess: subprocess | ga-cp3hwi | the runtime lease cross-process harness is a checked Medium subprocess owner; the role processes are confined to TestRuntimeLeaseCrossProcess, which re-execs the test binary to prove the lease across real processes: a flock dies with its process, so only a killed process proves crash release, and the store record must fence a second process that shares nothing but the store | P0.4b | 2026-10-31 |
 | Medium owner | `internal/workrecord` package `workrecord` | TestCommitReachableOnBranch: subprocess | ga-cp3hwi | the ADR-0009 commit-reachability oracle is a checked Medium subprocess owner; the git processes are confined to TestCommitReachableOnBranch, which exists to ask a real repository whether a commit is an ancestor of a branch: CommitReachableOnBranch is that git invocation, so a fake oracle would only prove itself | P0.4b | 2026-10-31 |
 | Medium owner | `scripts` package `scripts_test` | TestAddTestenvImportSkipsNestedGitWorktrees: subprocess | ga-t00ejy | the nested-git-worktree walk-skip regression proof is a checked Medium subprocess owner; the one go run subprocess is confined to TestAddTestenvImportSkipsNestedGitWorktrees, which exists to exercise add-testenv-import.go end to end: the script is package main, so only a real subprocess run can prove its directory walk skips linked git worktrees | P0.4b | 2026-10-31 |
+| Medium owner | `scripts` package `scripts_test` | TestBazelLaneWorkerEnvStepStaleBase: subprocess | ga-cp3hwi | the bazel lane worker-env stale-base proof is a checked Medium subprocess owner; the git and bash subprocesses are confined to TestBazelLaneWorkerEnvStepStaleBase (ga-s9mdfm), which exists to run bazel.yml's lane worker-env preflight step itself against a scratch git origin whose main re-pins after the run chose its base (a stale base, a moved pin, a re-pinning PR, a lane that is not remote, no base-sha): the step is git plumbing feeding tools/rbe/worker-env-drift, so only real git and a real shell can prove a stale base fails a remote lane instead of skipping bazel green | P0.4b | 2026-10-31 |
 | Medium owner | `scripts` package `scripts_test` | TestBazelNightlyFreshDecision: subprocess | ga-cp3hwi | the nightly fresh-on-drift decision proof is a checked Medium subprocess owner; the bash subprocess per case is confined to TestBazelNightlyFreshDecision, which exists to run bazel-nightly.yml's decide step script against a PATH-injected stub gh (shadow mode, a covered week, a new fingerprint, a key prefix, a PR-scoped cache entry, a dispatch, no canary run, a malformed fingerprint): the decision is shell and gh, so only a real shell run can prove when the nightly re-executes every test and that it fails open to fresh | P0.4b | 2026-10-31 |
 | Medium owner | `scripts` package `scripts_test` | TestCacheProbes: http_test_server | ga-cp3hwi | the anonymous-cache probes' behavior proof is a checked Medium HTTP test server owner; the loopback TLS HTTP/2 servers are confined to TestCacheProbes, whose one stand-in rbe-cache runs tools/rbe/cache-zstd-probe.sh (zstd advertised or not) and tools/rbe/cache-rrc-probe.sh (an answer or none, the action cache's and the CAS's NOT_FOUND or not, the kill switch off) through gRPC and HTTP errors, malformed answers and timeouts: the probes are curl's HTTP/2 and gRPC trailers, so only a real server can prove when fork-cache asks for zstd and when fork-cache lanes read the remote repo contents cache | P0.4b | 2026-10-31 |
 | Medium owner | `scripts` package `scripts_test` | TestDockerSessionProtocol: subprocess | ga-cp3hwi | Docker session adapter protocol proof is a checked Medium owner; the one adapter subprocess is confined to TestDockerSessionProtocol and Docker itself is a strict PATH-injected fake | W6 | 2026-10-31 |

@@ -156,7 +156,10 @@ js_test(
     ],
 )
 
-exports_files(["package.json"])
+exports_files([
+    "BUILD.bazel",
+    "package.json",
+])
 
 # --- bazel_repo_srcs (managed by tools/bazel/repo_tree.py) ---
 

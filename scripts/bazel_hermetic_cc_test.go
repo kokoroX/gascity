@@ -339,3 +339,39 @@ llvm.sysroot(
 		}
 	}
 }
+
+// Darwin reads the host SDK's stubs and the keg-only Homebrew ICU headers.
+func TestDarwinToolchainUsesHostLinkerAndICU(t *testing.T) {
+	module := readFile(t, repoRoot(t), hermeticCCModuleFile)
+	for _, want := range []string{
+		`linker = {"darwin-aarch64": "auto"}`,
+		`extra_compile_flags = {"darwin-aarch64": ["-I/opt/homebrew/opt/icu4c/include"]}`,
+		`extra_link_flags = {"darwin-aarch64": ["-L/opt/homebrew/opt/icu4c/lib"]}`,
+	} {
+		if !strings.Contains(module, want) {
+			t.Errorf("Darwin toolchain lacks %s", want)
+		}
+	}
+}
+
+// Pinned Linux executables must not be selected on unsupported host platforms.
+func TestPinnedLinuxTestBinariesArePlatformConstrained(t *testing.T) {
+	for _, tc := range []struct{ path, target string }{
+		{"BUILD.bazel", "goreleaser_check_test"},
+		{"internal/api/dashboardspa/web/frontend/BUILD.bazel", "playwright_test"},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			build := readFile(t, repoRoot(t), tc.path)
+			rule := regexp.MustCompile(`(?ms)^\w+_test\(\n    name = "` + regexp.QuoteMeta(tc.target) + `",\n.*?^\)`).FindString(build)
+			compat := regexp.MustCompile(`(?s)target_compatible_with = \[(.*?)\]`).FindStringSubmatch(rule)
+			if len(compat) != 2 {
+				t.Fatalf("%s has no platform constraints", tc.target)
+			}
+			for _, want := range []string{"@platforms//cpu:x86_64", "@platforms//os:linux"} {
+				if !strings.Contains(compat[1], `"`+want+`"`) {
+					t.Errorf("%s must require %s", tc.target, want)
+				}
+			}
+		})
+	}
+}
