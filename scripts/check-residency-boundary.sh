@@ -439,53 +439,50 @@ if [[ ! -r "$baseline_file" ]]; then
 	exit 1
 fi
 
-declare -A baseline_count=()
-declare -A current_count=()
-
 # `ast:` rows belong to the AST half of the guard
 # (scripts/residency_signature_rule_test.go and
 # scripts/residency_expression_rules_test.go), which shares this baseline file so
 # there is one ratchet rather than two that can disagree. This half ignores them.
-while IFS=$'\t' read -r path fn pattern count; do
-	[[ -z "${path:-}" || "${path:0:1}" == "#" ]] && continue
-	[[ "$pattern" == ast:* ]] && continue
-	baseline_count["$path	$fn	$pattern"]=$count
-done <"$baseline_file"
-
-if ((${#baseline_count[@]} == 0)); then
-	note "baseline $baseline_file declares no site; the ratchet has no denominator"
-	exit 1
-fi
-
-while IFS=$'\t' read -r path fn pattern count; do
-	[[ -z "${path:-}" ]] && continue
-	current_count["$path	$fn	$pattern"]=$count
-done <<<"$current"
-
-for key in "${!current_count[@]}"; do
-	have=${current_count[$key]}
-	want=${baseline_count[$key]:-0}
-	if ((have > want)); then
-		printf 'RESIDENCY-BOUNDARY: %s: %d sites, baseline %d — a NEW store-enumeration site. Consume internal/storeref (Plan/ResolveOwner/Union) or annotate the line with `// residency:allow <reason>`.\n' "${key//	/ }" "$have" "$want"
-		failed=1
-	fi
-done
-
-for key in "${!baseline_count[@]}"; do
-	want=${baseline_count[$key]}
-	have=${current_count[$key]:-0}
-	if ((have < want)); then
-		printf 'RESIDENCY-BOUNDARY: %s: %d sites, baseline %d — the baseline must SHRINK in the same commit that retires a site. Follow the regeneration procedure in the header of scripts/residency-boundary-baseline.txt; do NOT redirect --emit-baseline over that file, it emits this half%s rows only.\n' "${key//	/ }" "$have" "$want" "'"
-		failed=1
-	fi
-done
-
-if ((failed)); then
-	echo "---"
-	echo "The residency lookup contract lives in internal/storeref. A store list assembled"
-	echo "anywhere else re-derives the identity gate, the leg order, the dedupe rule and"
-	echo "the fail-loud policy — and every restatement is a chance to get one clause wrong."
-	exit 1
-fi
-
-exit 0
+awk -F '\t' '
+	FILENAME == ARGV[1] {
+		if ($1 == "" || $1 ~ /^#/ || $3 ~ /^ast:/) next
+		baseline_count[$1 "\t" $2 "\t" $3] = $4
+		sites = 1
+		next
+	}
+	$1 != "" { current_count[$1 "\t" $2 "\t" $3] = $4 }
+	END {
+		if (!sites) {
+			print "check-residency-boundary: baseline " ARGV[1] " declares no site; the ratchet has no denominator" > "/dev/stderr"
+			exit 1
+		}
+		for (key in current_count) {
+			have = current_count[key] + 0
+			want = baseline_count[key] + 0
+			if (have > want) {
+				site = key
+				gsub(/\t/, " ", site)
+				printf "RESIDENCY-BOUNDARY: %s: %d sites, baseline %d — a NEW store-enumeration site. Consume internal/storeref (Plan/ResolveOwner/Union) or annotate the line with `// residency:allow <reason>`.\n", site, have, want
+				failed = 1
+			}
+		}
+		for (key in baseline_count) {
+			want = baseline_count[key] + 0
+			have = current_count[key] + 0
+			if (have < want) {
+				site = key
+				gsub(/\t/, " ", site)
+				printf "RESIDENCY-BOUNDARY: %s: %d sites, baseline %d — the baseline must SHRINK in the same commit that retires a site. Follow the regeneration procedure in the header of scripts/residency-boundary-baseline.txt; do NOT redirect --emit-baseline over that file, it emits this half%s rows only.\n", site, have, want, "\047"
+				failed = 1
+			}
+		}
+		if (failed) {
+			print "---"
+			print "The residency lookup contract lives in internal/storeref. A store list assembled"
+			print "anywhere else re-derives the identity gate, the leg order, the dedupe rule and"
+			print "the fail-loud policy — and every restatement is a chance to get one clause wrong."
+		}
+		exit failed
+	}
+' "$baseline_file" - <<<"$current"
+exit $?
