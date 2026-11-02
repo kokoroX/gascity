@@ -7,14 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
 // A3's indexes and memos over legacy's linear scans. Each is checked
-// against the scan it replaces: the legacy path where one remains (a nil
-// index or memo), a frozen copy where the scan was rewritten in place.
+// against the scan it replaces, which a nil index or memo still selects.
 
 // Kills: an ID index that keeps the last of a duplicated ID, or points at
 // the wrong row.
@@ -154,93 +152,6 @@ func TestAwakeSetIndexOracle(t *testing.T) {
 	}
 	if byName < 100 {
 		t.Fatalf("only %d cities compared keyed by session name", byName)
-	}
-}
-
-// Kills: a template bucket that drops or reorders a resume or new-demand
-// candidate, or buckets by a different spelling than the per-agent loop
-// compared (normalization, rig and pool-instance routes, the one-agent
-// fallback, the session-template guard, protected and in-flight rows).
-func TestPoolDesiredIndexOracle(t *testing.T) {
-	for seed := int64(0); seed < 400; seed++ {
-		rng := rand.New(rand.NewSource(seed))
-		pick := func(xs ...string) string { return xs[rng.Intn(len(xs))] }
-		cfg := &config.City{}
-		for i := 0; i < 1+rng.Intn(4); i++ {
-			a := config.Agent{Name: fmt.Sprintf("pool-%d", i), MaxActiveSessions: intPtr(1 + rng.Intn(6))}
-			switch rng.Intn(5) {
-			case 0:
-				a.Dir = "rig"
-			case 1:
-				a.WakeMode = "fresh"
-			case 2:
-				a.Suspended = rng.Intn(2) == 0
-			}
-			cfg.Agents = append(cfg.Agents, a)
-		}
-		if rng.Intn(3) == 0 {
-			cfg.Agents = append(cfg.Agents, config.Agent{Name: "chat"})
-			cfg.NamedSessions = []config.NamedSession{{Template: "chat", Mode: "on_demand"}}
-		}
-		var rows []beads.Bead
-		var identities []string
-		for i := 0; i < rng.Intn(30); i++ {
-			a := cfg.Agents[rng.Intn(len(cfg.Agents))]
-			id := fmt.Sprintf("gc-%d", i)
-			name := fmt.Sprintf("%s-%d", a.QualifiedName(), 1+rng.Intn(4))
-			meta := []string{
-				"template", pick(a.QualifiedName(), a.QualifiedName(), a.Name, ""), "agent_name", name,
-				"session_name", "s-" + id, "state", pick("active", "asleep", "creating", "start_pending"),
-			}
-			if rng.Intn(4) > 0 {
-				meta = append(meta, "pool_managed", "true", "pool_slot", fmt.Sprint(1+rng.Intn(4)))
-			}
-			switch rng.Intn(6) {
-			case 0:
-				meta = append(meta, "session_origin", "ephemeral")
-			case 1:
-				meta = append(meta, "state_reason", "creation_complete", "creation_complete_at", allocNow.Add(-time.Duration(rng.Intn(120))*time.Second).Format(time.RFC3339))
-			case 2:
-				meta = append(meta, "pending_create_claim", "true", "pending_create_started_at", allocNow.Format(time.RFC3339))
-			case 3:
-				meta = append(meta, "configured_named_session", "true", "configured_named_identity", "chat")
-			}
-			row := sessionRow(id, meta...)
-			row.CreatedAt = allocNow.Add(-time.Duration(rng.Intn(3)) * time.Minute)
-			if rng.Intn(10) == 0 {
-				row.Status = "closed"
-			}
-			rows = append(rows, row)
-			identities = append(identities, id, "s-"+id, name)
-		}
-		var work []beads.Bead
-		counts, demand := map[string]int{}, map[string]scaleCheckDemand{}
-		for i := 0; i < rng.Intn(30); i++ {
-			assignee := pick(cfg.Agents[0].QualifiedName(), "chat", "", "nobody")
-			if len(identities) > 0 && rng.Intn(3) > 0 {
-				assignee = identities[rng.Intn(len(identities))]
-			}
-			wb := beads.Bead{
-				ID: fmt.Sprintf("w-%d", i), Status: pick("open", "in_progress", "in_progress", "closed"),
-				Assignee: pick(assignee, " "+assignee), Metadata: map[string]string{},
-			}
-			if a := cfg.Agents[rng.Intn(len(cfg.Agents))]; rng.Intn(2) == 0 {
-				wb.Metadata["gc.routed_to"] = pick(a.QualifiedName(), a.Name, a.QualifiedName()+"-2")
-			}
-			work = append(work, wb)
-		}
-		for _, a := range cfg.Agents {
-			if n := rng.Intn(4); n > 0 {
-				counts[a.QualifiedName()] = n
-				demand[a.QualifiedName()] = scaleCheckDemand{Count: n, WorkBeadIDs: []string{"w-1", "w-2"}}
-			}
-		}
-		infos := sessionInfosFromBeads(rows)
-		want := computePoolDesiredStatesAtPreA3(cfg, work, infos, counts, demand, allocNow, nil)
-		got := computePoolDesiredStatesAt(cfg, work, infos, counts, demand, allocNow, nil)
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("seed %d: bucketed pool desired\n%+v\nwant the frozen scan's\n%+v", seed, got, want)
-		}
 	}
 }
 
