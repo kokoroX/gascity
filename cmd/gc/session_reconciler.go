@@ -2639,6 +2639,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					continue
 				}
 				tp = preservedTP
+				desired = true
 				if trace != nil {
 					trace.RecordDecision(TraceSiteReconcilerPreserveConfiguredNamed, TraceReasonPreserve, TraceOutcomeKeptOpen, template, name, traceRecordPayload{
 						"provider_alive": providerAlive,
