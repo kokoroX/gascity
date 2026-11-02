@@ -86,15 +86,7 @@ func compileFormula(name string, searchPaths []string, vars map[string]string, v
 		}
 	}
 
-	compileVars := make(map[string]string)
-	for vname, def := range resolved.Vars {
-		if def != nil && def.Default != nil {
-			compileVars[vname] = *def.Default
-		}
-	}
-	for k, v := range vars {
-		compileVars[k] = v
-	}
+	compileVars := ApplyDefaults(resolved, vars)
 	if err := validateCompileTimeVars(resolved, vars); err != nil {
 		return nil, err
 	}
@@ -149,15 +141,7 @@ func compileFormula(name string, searchPaths []string, vars map[string]string, v
 
 	// Stage 9: Handle standalone expansion formulas
 	if resolved.Type == TypeExpansion && len(resolved.Template) > 0 {
-		expansionVars := make(map[string]string)
-		for vname, def := range resolved.Vars {
-			if def != nil && def.Default != nil {
-				expansionVars[vname] = *def.Default
-			}
-		}
-		for k, v := range vars {
-			expansionVars[k] = v
-		}
+		expansionVars := ApplyDefaults(resolved, vars)
 		if err := MaterializeExpansion(resolved, "main", expansionVars); err != nil {
 			return nil, fmt.Errorf("standalone expansion %q: %w", name, err)
 		}
@@ -554,6 +538,9 @@ func flattenSteps(steps []*Step, parentID string, idMapping map[string]string, o
 					ID:      step.Gate.ID,
 					Timeout: step.Gate.Timeout,
 				},
+			}
+			if step.Gate.Type != "" {
+				gateStep.Metadata = map[string]string{beadmeta.GateTypeMetadataKey: step.Gate.Type}
 			}
 			defP := 2
 			gateStep.Priority = &defP

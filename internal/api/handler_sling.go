@@ -191,11 +191,24 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 		// bead, the rule `gc sling` applies through resolveGraphStore.
 		// Passing the non-relocated graph store (the city store) put a rig
 		// bead's workflow where the rig's pool workers never look.
-		GraphStore: relocatedGraphStore(s.state),
-		Events:     s.state.EventProvider(),
-		StoreRef:   storeRef,
+		GraphStore:  relocatedGraphStore(s.state),
+		GraphHandle: s.state.GraphBeadStore(),
+		Events:      s.state.EventProvider(),
+		StoreRef:    storeRef,
 		SourceWorkflowStores: func() ([]sling.SourceWorkflowStore, error) {
 			return s.sourceWorkflowStores(), nil
+		},
+		SourceWorkflowScanIncomplete: func() bool {
+			if s.state.CityBeadStore() == nil {
+				return true
+			}
+			stores := s.state.BeadStores() // residency:allow — only checks whether the supplied scan omitted a configured rig; reads no bead or owner
+			for _, rig := range s.state.Config().Rigs {
+				if stores[rig.Name] == nil {
+					return true
+				}
+			}
+			return false
 		},
 		SourceWorkflowStoreScanWarning: func(scanStoreRef string, scanErr error) {
 			key := strings.TrimSpace(scanStoreRef)
@@ -253,6 +266,9 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 		ScopeKind: body.ScopeKind,
 		ScopeRef:  body.ScopeRef,
 	}
+	// Who launched this is server fact from the verified write grant, never
+	// a client field or var.
+	opts.Initiator, _ = VerifiedPrincipal(ctx)
 	mode := "direct"
 	switch {
 	case attachedBeadID != "":

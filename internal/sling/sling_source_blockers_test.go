@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/dispatch"
 	"github.com/gastownhall/gascity/internal/runtime"
 )
 
@@ -222,13 +223,7 @@ func TestSlingAttachGraphFormulaWaitsOnSourceBlockers(t *testing.T) {
 	})
 }
 
-// TestSlingAttachGraphFormulaSkipsUnresolvableSourceBlockers covers the
-// split-store case. A dependency row only means something to the store that
-// holds it: an edge naming an id the workflow store cannot resolve would leave
-// every step permanently not-ready, so the launch drops it and records why
-// instead of wedging the workflow. A blocker that is already closed needs no
-// edge at all — it constrains nothing.
-func TestSlingAttachGraphFormulaSkipsUnresolvableSourceBlockers(t *testing.T) {
+func TestSlingAttachGraphFormulaGatesRemoteSourceBlockers(t *testing.T) {
 	newSplit := func(t *testing.T) (SlingDeps, beads.Bead, beads.Bead) {
 		t.Helper()
 		formulaDir := t.TempDir()
@@ -250,27 +245,170 @@ func TestSlingAttachGraphFormulaSkipsUnresolvableSourceBlockers(t *testing.T) {
 		return deps, source, blocker
 	}
 
-	t.Run("open blocker outside the workflow store is dropped and warned about", func(t *testing.T) {
+	t.Run("open remote blocker gates every step until released", func(t *testing.T) {
 		deps, source, blocker := newSplit(t)
-		if _, err := deps.GraphStore.Get(blocker.ID); err == nil {
-			t.Fatal("fixture blocker is resolvable from the graph store; the case under test is gone")
-		}
-
 		result := attachGraphWorkflow(t, deps, source.ID)
-		for _, b := range workflowBeads(t, deps.GraphStore, result.WorkflowID) {
-			if containsID(blockingDepIDs(t, deps.GraphStore, b.ID), blocker.ID) {
-				t.Errorf("workflow bead %s carries a blocks edge to %s, which the workflow store cannot resolve", b.ID, blocker.ID)
+		for _, warning := range result.BeadWarnings {
+			if strings.Contains(warning, blocker.ID) {
+				t.Fatalf("warning for resolved blocker: %s", warning)
 			}
+		}
+		gates, err := deps.GraphStore.List(beads.ListQuery{Label: dispatch.CrossStoreGateLabel})
+		if err != nil || len(gates) != 1 {
+			t.Fatalf("gates = %+v, %v; want one", gates, err)
+		}
+		gate := gates[0]
+		if gate.Metadata[beadmeta.CrossStoreBlockerMetadataKey] != blocker.ID || gate.Metadata[beadmeta.CrossStoreGateOwnerMetadataKey] != result.WorkflowID {
+			t.Fatalf("gate metadata = %v", gate.Metadata)
+		}
+		var steps []string
+		for _, b := range workflowBeads(t, deps.GraphStore, result.WorkflowID) {
+			if b.ID == gate.ID {
+				continue
+			}
+			steps = append(steps, b.ID)
+			if !containsID(blockingDepIDs(t, deps.GraphStore, b.ID), gate.ID) {
+				t.Errorf("step %s lacks gate dependency", b.ID)
+			}
+			if containsID(blockingDepIDs(t, deps.GraphStore, b.ID), blocker.ID) {
+				t.Errorf("step %s names remote blocker", b.ID)
+			}
+		}
+		ready, err := deps.GraphStore.Ready()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range ready {
+			if containsID(steps, b.ID) {
+				t.Errorf("step %s is ready before blocker closes", b.ID)
+			}
+		}
+		sling, err := New(deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = sling.AttachFormula(context.Background(), "graph-work", source.ID, config.Agent{Name: "worker", MaxActiveSessions: intPtr(1)}, FormulaOpts{})
+		if err == nil {
+			t.Fatal("re-sling of a live workflow should report the existing workflow")
+		}
+		root, err := deps.GraphStore.Get(result.WorkflowID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := dispatch.EnsureCrossStoreGate(deps.GraphHandle, root, blocker.ID, true)
+		if err != nil || again != gate.ID {
+			t.Fatalf("repeated gate lookup = %q, %v; want %q", again, err, gate.ID)
+		}
+		gates, err = deps.GraphStore.List(beads.ListQuery{Label: dispatch.CrossStoreGateLabel})
+		if err != nil || len(gates) != 1 {
+			t.Fatalf("re-sling gates = %+v, %v; want one", gates, err)
+		}
+		if err := deps.Store.Close(blocker.ID); err != nil {
+			t.Fatal(err)
+		}
+		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphStore, func(_ []string) (dispatch.CrossStoreBlockerResolution, error) {
+			b, err := deps.Store.Get(blocker.ID)
+			if err != nil {
+				return dispatch.CrossStoreBlockerResolution{}, err
+			}
+			return dispatch.CrossStoreBlockerResolution{Copies: map[string][]beads.Bead{blocker.ID: {b}}}, nil
+		})
+		if err != nil || !containsID(report.Released, gate.ID) {
+			t.Fatalf("release = %+v, %v", report, err)
+		}
+		ready, err = deps.GraphStore.Ready()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range ready {
+			if containsID(steps, b.ID) {
+				return
+			}
+		}
+		t.Fatal("no workflow step became ready after blocker closed")
+	})
+
+	t.Run("a closed copy does not hide an open copy in another store", func(t *testing.T) {
+		deps, source, blocker := newSplit(t)
+		if err := deps.Store.Close(blocker.ID); err != nil {
+			t.Fatal(err)
+		}
+		other := beads.NewMemStoreFrom(0, []beads.Bead{{ID: blocker.ID, Title: "copy", Type: "task", Status: "open"}}, nil)
+		deps.SourceWorkflowStores = func() ([]SourceWorkflowStore, error) {
+			return []SourceWorkflowStore{{Store: deps.Store, StoreRef: "work"}, {Store: other, StoreRef: "other"}}, nil
+		}
+		result := attachGraphWorkflow(t, deps, source.ID)
+		gates, err := deps.GraphStore.List(beads.ListQuery{Label: dispatch.CrossStoreGateLabel})
+		if err != nil || len(gates) != 1 {
+			t.Fatalf("gates = %+v, %v; want one", gates, err)
+		}
+		for _, warning := range result.BeadWarnings {
+			if strings.Contains(warning, blocker.ID) {
+				t.Fatalf("warning for found blocker: %s", warning)
+			}
+		}
+		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphStore, func([]string) (dispatch.CrossStoreBlockerResolution, error) {
+			a, err := deps.Store.Get(blocker.ID)
+			if err != nil {
+				return dispatch.CrossStoreBlockerResolution{}, err
+			}
+			b, err := other.Get(blocker.ID)
+			if err != nil {
+				return dispatch.CrossStoreBlockerResolution{}, err
+			}
+			return dispatch.CrossStoreBlockerResolution{Copies: map[string][]beads.Bead{blocker.ID: {a, b}}}, nil
+		})
+		if err != nil || len(report.Released) != 0 {
+			t.Fatalf("release = %+v, %v; want gate held for open copy", report, err)
+		}
+	})
+
+	t.Run("missing blocker stays gated and warns", func(t *testing.T) {
+		deps, source, blocker := newSplit(t)
+		if err := deps.Store.Delete(blocker.ID); err != nil {
+			t.Fatal(err)
+		}
+		result := attachGraphWorkflow(t, deps, source.ID)
+		gates, err := deps.GraphStore.List(beads.ListQuery{Label: dispatch.CrossStoreGateLabel})
+		if err != nil || len(gates) != 1 {
+			t.Fatalf("gates = %+v, %v; want one", gates, err)
+		}
+		if gates[0].Metadata[beadmeta.CrossStoreBlockerMetadataKey] != blocker.ID {
+			t.Fatalf("gate metadata = %v", gates[0].Metadata)
 		}
 		found := false
 		for _, warning := range result.BeadWarnings {
-			if strings.Contains(warning, "cannot resolve") && strings.Contains(warning, blocker.ID) {
+			if strings.Contains(warning, blocker.ID) {
 				found = true
-				break
 			}
 		}
 		if !found {
-			t.Errorf("BeadWarnings = %v, want a warning that %s cannot be resolved", result.BeadWarnings, blocker.ID)
+			t.Fatalf("warnings = %v; want missing blocker", result.BeadWarnings)
+		}
+		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphStore, func([]string) (dispatch.CrossStoreBlockerResolution, error) {
+			return dispatch.CrossStoreBlockerResolution{}, nil
+		})
+		if err != nil || len(report.Released) != 0 {
+			t.Fatalf("release = %+v, %v; want gate held", report, err)
+		}
+	})
+
+	t.Run("a partial scan keeps an unknown blocker gated without claiming it is missing", func(t *testing.T) {
+		deps, source, blocker := newSplit(t)
+		if err := deps.Store.Delete(blocker.ID); err != nil {
+			t.Fatal(err)
+		}
+		deps.SourceWorkflowStores = func() ([]SourceWorkflowStore, error) { return nil, nil }
+		deps.SourceWorkflowScanIncomplete = func() bool { return true }
+		result := attachGraphWorkflow(t, deps, source.ID)
+		gates, err := deps.GraphStore.List(beads.ListQuery{Label: dispatch.CrossStoreGateLabel})
+		if err != nil || len(gates) != 1 {
+			t.Fatalf("gates = %+v, %v; want one", gates, err)
+		}
+		for _, warning := range result.BeadWarnings {
+			if strings.Contains(warning, blocker.ID) {
+				t.Fatalf("warning asserts absence after partial scan: %s", warning)
+			}
 		}
 	})
 

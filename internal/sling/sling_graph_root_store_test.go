@@ -5,6 +5,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/beadstest"
 	"github.com/gastownhall/gascity/internal/beads/splittest"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/molecule"
@@ -37,6 +38,7 @@ func splitSlingDeps(t *testing.T, cfg *config.City) (SlingDeps, beads.Store, bea
 	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
 	deps.Store = work
 	deps.GraphStore = graph
+	deps.GraphHandle = beadstest.Graph(graph)
 	return deps, work, graph
 }
 

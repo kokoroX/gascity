@@ -71,6 +71,21 @@ type SlingOpts struct {
 	InlineText bool
 	ScopeKind  string
 	ScopeRef   string
+	// Initiator names who launched this sling: the verified principal of the
+	// API request (a write-grant key id). When set, sling records it as
+	// gc.initiator on every root it instantiates and on the bead it routes,
+	// before routing, so the stamp is present before any worker can claim
+	// the work. Empty stamps nothing.
+	Initiator string
+}
+
+// rootMetadata is the metadata sling asks molecule to write on every root it
+// instantiates for these options.
+func (o SlingOpts) rootMetadata() map[string]string {
+	if o.Initiator == "" {
+		return nil
+	}
+	return map[string]string{beadmeta.InitiatorMetadataKey: o.Initiator}
 }
 
 // AgentResolver resolves an agent name to a config.Agent.
@@ -142,6 +157,8 @@ type SlingDeps struct {
 	// store). When nil, graph beads collapse onto Store — the single-store
 	// default — so a single-store caller behaves exactly as before the seam.
 	GraphStore beads.Store
+	// GraphHandle is the residency-resolved graph class handle used to mint gates.
+	GraphHandle beads.GraphStore
 	// Events records best-effort current execution facts after graph workflow
 	// materialization. Nil leaves sling event-silent.
 	Events events.Recorder
@@ -158,6 +175,10 @@ type SlingDeps struct {
 	// SourceWorkflowStores lists every bead store that may contain workflow
 	// roots for source-workflow singleton checks and recovery.
 	SourceWorkflowStores func() ([]SourceWorkflowStore, error)
+	// SourceWorkflowScanIncomplete reports serving stores the lister could not
+	// inspect. A blocker missing from a partial scan remains gated without an
+	// assertion that it is absent everywhere.
+	SourceWorkflowScanIncomplete func() bool
 	// SourceWorkflowStoreScanWarning reports a non-source store whose live-root
 	// scan failed and was skipped. When nil, scan failures remain fatal. The
 	// source store identified by StoreRef is always strict and is never skipped.
@@ -230,6 +251,7 @@ type SlingResult struct {
 
 	// Structured warnings (callers decide how to display).
 	AgentSuspended bool     // target agent is suspended
+	CitySuspended  bool     // the city is effectively suspended
 	SuspendedRig   string   // non-empty: name of the target's rig, which is suspended
 	PoolEmpty      bool     // pool max=0
 	AutoBurned     []string // IDs of auto-burned stale molecules
@@ -301,6 +323,9 @@ type RouteOpts struct {
 	// target agent has one configured. Without this field, ExpandConvoy
 	// cannot propagate --no-formula through DoSlingBatch.
 	NoFormula bool
+	// Initiator mirrors SlingOpts.Initiator. Without it the plain-route hop
+	// from Dispatch through ExpandConvoy would drop the verified principal.
+	Initiator string
 }
 
 // FormulaOpts holds options for formula-based operations.
@@ -327,6 +352,8 @@ type FormulaOpts struct {
 	SkipPoke  bool
 	ScopeKind string
 	ScopeRef  string
+	// Initiator mirrors SlingOpts.Initiator.
+	Initiator string
 }
 
 // RouteBead routes a plain bead to an agent.
@@ -344,6 +371,7 @@ func (s *Sling) RouteBead(_ context.Context, beadID string, target config.Agent,
 		DryRun:        opts.DryRun,
 		InlineText:    opts.InlineText,
 		NoFormula:     opts.NoFormula,
+		Initiator:     opts.Initiator,
 	}, s.deps, s.deps.Store)
 }
 
@@ -365,6 +393,7 @@ func (s *Sling) LaunchFormula(_ context.Context, formulaName string, target conf
 		DryRun:        opts.DryRun,
 		ScopeKind:     opts.ScopeKind,
 		ScopeRef:      opts.ScopeRef,
+		Initiator:     opts.Initiator,
 	}, s.deps, s.deps.Store)
 }
 
@@ -386,6 +415,7 @@ func (s *Sling) AttachFormula(_ context.Context, formulaName, beadID string, tar
 		DryRun:        opts.DryRun,
 		ScopeKind:     opts.ScopeKind,
 		ScopeRef:      opts.ScopeRef,
+		Initiator:     opts.Initiator,
 	}, s.deps, s.deps.Store)
 }
 
@@ -415,6 +445,7 @@ func (s *Sling) Dispatch(ctx context.Context, opts SlingOpts, querier BeadChildQ
 		DryRun:     opts.DryRun,
 		InlineText: opts.InlineText,
 		NoFormula:  opts.NoFormula,
+		Initiator:  opts.Initiator,
 	}, querier)
 }
 
@@ -433,6 +464,7 @@ func (s *Sling) ExpandConvoy(_ context.Context, convoyID string, target config.A
 		DryRun:        opts.DryRun,
 		InlineText:    opts.InlineText,
 		NoFormula:     opts.NoFormula,
+		Initiator:     opts.Initiator,
 	}, s.deps, querier)
 }
 
@@ -1006,33 +1038,27 @@ func BeadMetadataTarget(store beads.Store, beadID string) string {
 				return target
 			}
 		}
-		if target, ambiguous := trackingConvoyTarget(store, beadID); target != "" || ambiguous {
+		convoys, err := convoycore.TrackingConvoysForItem(store, beadID)
+		if err != nil {
+			return ""
+		}
+		target := ""
+		for _, convoy := range convoys {
+			t := strings.TrimSpace(convoy.Metadata["target"])
+			switch {
+			case t == "" || t == target:
+			case target == "":
+				target = t
+			default:
+				return ""
+			}
+		}
+		if target != "" {
 			return target
 		}
 		beadID = strings.TrimSpace(b.ParentID)
 	}
 	return ""
-}
-
-// trackingConvoyTarget returns the target shared by the convoys that track
-// beadID. ambiguous reports that those convoys name more than one target, in
-// which case target is empty.
-func trackingConvoyTarget(store beads.Store, beadID string) (target string, ambiguous bool) {
-	convoys, err := convoycore.TrackingConvoysForItem(store, beadID)
-	if err != nil {
-		return "", false
-	}
-	for _, cv := range convoys {
-		t := strings.TrimSpace(cv.Metadata["target"])
-		switch {
-		case t == "" || t == target:
-		case target == "":
-			target = t
-		default:
-			return "", true
-		}
-	}
-	return target, false
 }
 
 // SlingFormulaSearchPaths returns the formula search paths for the current
@@ -1803,4 +1829,16 @@ type BeadCheckResult struct {
 // BeadCheckOptions configures pre-flight bead state checks for a route.
 type BeadCheckOptions struct {
 	NoConvoy bool
+}
+
+// graphWorkflowAttachmentInGraphStore is IsGraphWorkflowAttachment asked of
+// the graph store for a root a recipe just poured: a v1 poured root (work
+// class) lives in the work store, and missing it there is the right answer
+// ("not graph.v2").
+func graphWorkflowAttachmentInGraphStore(graphStore beads.Store, rootID string) (graph bool) {
+	_ = beads.FederatedRead(func() error {
+		graph = IsGraphWorkflowAttachment(graphStore, rootID)
+		return nil
+	})
+	return graph
 }
