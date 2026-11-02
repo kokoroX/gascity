@@ -19,7 +19,8 @@ func closePatrolWisps(store interface {
 	List(beads.ListQuery) ([]beads.Bead, error)
 	DepList(id, direction string) ([]beads.Dep, error)
 	CloseAll([]string, map[string]string) (int, error)
-}, assignees []string) (int, error) {
+}, assignees []string,
+) (int, error) {
 	if store == nil || len(assignees) == 0 {
 		return 0, nil
 	}
