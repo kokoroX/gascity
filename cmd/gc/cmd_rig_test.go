@@ -3126,7 +3126,7 @@ func TestDoRigAdd_AdoptPersistedIdentitySkipsInit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rigPath, ".beads", "metadata.json"), []byte(metadata), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	configYaml := "issue-prefix: JikeRental\n" +
+	configYaml := "issue-prefix: jikerental\n" +
 		"gc.endpoint_origin: explicit\n" +
 		"gc.endpoint_status: unverified\n" +
 		"dolt.host: host.docker.internal\n" +
@@ -3138,7 +3138,7 @@ func TestDoRigAdd_AdoptPersistedIdentitySkipsInit(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := doRigAdd(fsys.OSFS{}, cityPath, rigPath, nil, "", "JikeRental", "", false, true, &stdout, &stderr)
+	code := doRigAdd(fsys.OSFS{}, cityPath, rigPath, nil, "", "jikerental", "", false, true, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("doRigAdd --adopt returned %d, stderr: %s", code, stderr.String())
 	}
@@ -3257,7 +3257,7 @@ func TestDoRigAdd_AdoptFailedInitLeavesStoreFilesAsFound(t *testing.T) {
 	}
 	// bd creates both files 0600.
 	before := map[string]string{
-		"metadata.json": `{"backend":"dolt","database":"dolt","dolt_database":"ar","dolt_mode":"server","dolt_server_host":"127.0.0.1","dolt_server_port":21658}`,
+		"metadata.json": `{"backend":"dolt","database":"dolt","dolt_mode":"server","dolt_server_host":"127.0.0.1","dolt_server_port":21658}`,
 		"config.yaml":   "# bd template\nissue-prefix: \"ar\"\n",
 	}
 	for name, data := range before {
@@ -3390,7 +3390,7 @@ func TestDoRigAdd_AdoptFailedInitRestoresBeadsDirMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, data := range map[string]string{
-		"metadata.json": `{"backend":"dolt","database":"dolt","dolt_database":"ar","dolt_mode":"server"}`,
+		"metadata.json": `{"backend":"dolt","database":"dolt","dolt_mode":"server"}`,
 		"config.yaml":   "issue-prefix: \"ar\"\n",
 	} {
 		if err := os.WriteFile(filepath.Join(beads, name), []byte(data), 0o600); err != nil {
