@@ -375,7 +375,8 @@ func (s *Server) agentByName(ctx context.Context, name string) (*IndexOutput[age
 		return nil, apierr.AgentNotFound.Msg("agent " + name + " not found")
 	}
 
-	sessionName, running := s.newAgentSessionResolver(ctx, cfg, cityName).resolve(agentCfg, name, sp.IsRunning)
+	runtimeSessions := s.newAgentSessionResolver(ctx, cfg, cityName)
+	sessionName, running := runtimeSessions.resolve(agentCfg, name, sp.IsRunning)
 	// Fold active graph-resident (wisp) work into the running signal so a
 	// graph-working agent reports running even when its named provider session
 	// is down. hasGraphWork is always false on a single-store city.
@@ -458,7 +459,8 @@ func (s *Server) agentByName(ctx context.Context, name string) (*IndexOutput[age
 	resp.State = computeAgentState(suspended, quarantined, effectiveRunning, resp.ActiveBead, lastActivity, program)
 
 	if running && provider == "claude" && canAttributeSession(agentCfg, name, cfg, s.state.CityPath()) {
-		s.enrichSessionMeta(&resp, agentCfg, name)
+		enricher := agentListSessionEnricher{server: s, resolver: runtimeSessions}
+		enricher.enrich(&resp, agentCfg, name, sessionName, sessionID, provider)
 	}
 	obs := observeProgram(program, resp.Activity)
 	resp.ProgramStatus, resp.Activity, resp.ActivitySource = obs.status, obs.activity, obs.activitySource

@@ -1700,10 +1700,10 @@ internal/api/handler_agent_output.go	Server.resolveAgentTranscript	unwrap	2
 internal/api/handler_agent_output.go	Server.trySessionLogOutputHuma	unwrap	1
 internal/api/handler_agent_output_stream.go	Server.streamSessionLog	unwrap	1
 internal/api/handler_agent_output_stream.go	Server.streamSessionLogHuma	unwrap	1
-internal/api/handler_agents.go	Server.enrichSessionMeta	unwrap	1
 internal/api/handler_agents.go	Server.findActiveBeadForAssigneesWithFreshness	cap-assert	1
 internal/api/handler_agents.go	activeBeadSearchScope	raw-param	1
 internal/api/handler_agents.go	activeBeadSearchScope	raw-result	1
+internal/api/handler_agents.go	agentListSessionEnricher.enrich	unwrap	1
 internal/api/handler_agents.go	findLiveActiveBeadInStores	raw-param	1
 internal/api/handler_agents.go	liveActiveWork	raw-param	1
 internal/api/handler_agents_graph_work.go	Server.graphActiveWorkBySession	unwrap	1

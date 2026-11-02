@@ -682,33 +682,6 @@ func computeAgentState(suspended, quarantined, running bool, activeBead string, 
 	return "idle"
 }
 
-// enrichSessionMeta populates model and context usage fields on the agent
-// response by reading the tail of the agent's session JSONL file.
-func (s *Server) enrichSessionMeta(resp *agentResponse, agentCfg config.Agent, qualifiedName string) {
-	factory, err := s.workerFactory(s.state.SessionsBeadStore().Store)
-	if err != nil {
-		return
-	}
-	transcriptState, err := s.resolveAgentTranscript(qualifiedName, agentCfg)
-	if err != nil {
-		return
-	}
-	sessionFile := transcriptState.path
-	if sessionFile == "" {
-		return
-	}
-	meta, err := factory.TailMeta(sessionFile)
-	if err != nil || meta == nil {
-		return
-	}
-	resp.Model = meta.Model
-	if meta.ContextUsage != nil {
-		resp.ContextPct = &meta.ContextUsage.Percentage
-		resp.ContextWindow = &meta.ContextUsage.ContextWindow
-	}
-	resp.Activity = meta.Activity
-}
-
 // agentListSessionEnricher fills model and context fields on one agent list
 // request's rows. It reads the request's session snapshot at most once
 // (shared with the session resolver) and builds the worker factory at most
