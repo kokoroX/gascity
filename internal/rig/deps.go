@@ -103,6 +103,14 @@ type Deps struct {
 	// AdoptExistingStore reports whether an adopted store has durable provider
 	// identity and installs its hooks when it does. nil = no persisted identity.
 	AdoptExistingStore func(cityPath, rigPath string) (persisted bool, err error)
+	// ReadStorePrefix returns the issue prefix the bd store at rigPath records
+	// in its own config table (cmd/gc readAdoptedStoreIssuePrefix). bd keeps a
+	// store's prefix there and leaves .beads/config.yaml a commented template,
+	// so --adopt asks the store when config.yaml records none. It is consulted
+	// only on --adopt, only when config.yaml has no prefix and
+	// .beads/metadata.json exists. ("", nil) means the store records none. nil =
+	// config.yaml is the only source.
+	ReadStorePrefix func(rigPath string) (string, error)
 	// StoreContract reports whether the city uses the bd store contract (cmd/gc
 	// cityUsesBdStoreContract). It is a func, not a bool, because InitStore can
 	// seed provider state mid-flow and the flow re-evaluates it after init. nil =

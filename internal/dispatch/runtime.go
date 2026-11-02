@@ -188,15 +188,14 @@ func ProcessControl(store beads.Store, bead beads.Bead, opts ProcessOptions) (Co
 	}
 	opts.view = &rootView{}
 	if bead.Status != "open" {
-		// A control bead that is not open — typically stuck at in_progress
-		// after a rogue `bd update --status in_progress` from a worker —
-		// can silently strand an entire workflow because the serve loop
-		// treats the no-op return as a successful processed cycle. Emit a
-		// specific trace line so the skip is visible in the dispatcher
-		// trace log instead of looking identical to a processed cycle.
-		// See bug investigation on workflow ga-ttn5z where 20+ minutes of
-		// processing cycles silently no-op'd because ga-fw2fm had been
-		// moved to in_progress by its implement-change worker.
+		// A control bead that is not open — typically closed while a stale
+		// row still offers it, or stuck at in_progress after a rogue
+		// `bd update --status in_progress` from a worker — is a no-op:
+		// Processed stays false, and the serve loop counts the dispatch as
+		// a skip rather than progress. The trace line names the skip in the
+		// dispatcher trace log, where a stranded workflow (ga-ttn5z, whose
+		// ga-fw2fm had been moved to in_progress by its implement-change
+		// worker) would otherwise look like an idle one.
 		opts.tracef("process-control bead=%s kind=%s skip reason=bead_not_open status=%s",
 			bead.ID, bead.Metadata[beadmeta.KindMetadataKey], bead.Status)
 		return ControlResult{}, nil
@@ -916,40 +915,7 @@ func (s scopeSnapshot) skipOpenScopeMembers(store beads.Store, skipControlID str
 		}
 		all = loaded
 	}
-	pending := make(map[string]beads.Bead)
-	for _, member := range s.members {
-		if member.ID == skipControlID || member.Status != "open" {
-			continue
-		}
-		if member.Metadata[beadmeta.KindMetadataKey] == beadmeta.KindSpec {
-			continue
-		}
-		switch member.Metadata[beadmeta.ScopeRoleMetadataKey] {
-		case "body", "teardown":
-			continue
-		}
-		pending[member.ID] = member
-	}
-	for _, member := range s.members {
-		switch strings.TrimSpace(member.Metadata[beadmeta.KindMetadataKey]) {
-		case "retry", "ralph":
-		default:
-			continue
-		}
-		switch member.Metadata[beadmeta.ScopeRoleMetadataKey] {
-		case "body", "teardown":
-			continue
-		}
-		for _, candidate := range all {
-			if candidate.Status != "open" {
-				continue
-			}
-			if !isLogicalDescendant(member, candidate) {
-				continue
-			}
-			pending[candidate.ID] = candidate
-		}
-	}
+	pending := scopeUnsettledMembers(s.members, all, skipControlID, func(b beads.Bead) bool { return b.Status == "open" })
 
 	skipped := 0
 	// Termination: nothing is ever added to pending below, and every round that
@@ -1002,6 +968,56 @@ func (s scopeSnapshot) skipOpenScopeMembers(store beads.Store, skipControlID str
 	}
 
 	return skipped, nil
+}
+
+// scopeUnsettledMembers collects the scope beads that count as unsettled:
+// the scope's members except spec, body and teardown roles, plus the
+// logical descendants of nested retry/ralph members (a spawned attempt's own
+// membership is its control's, so the descendants are visited through the
+// root membership). skipControlID is exempt; the caller that drives the
+// selection owns its own close.
+//
+// unsettled is the status test, and the two live callers must not drift:
+// a scope abort passes "open" — those are the members it skips — while a
+// ralph iteration drain gate passes "not closed": the iteration-boundary
+// defect it exists for is a claimed sibling whose abort path neither skipped
+// nor closed (gastownhall/gascity#2519).
+func scopeUnsettledMembers(members, all []beads.Bead, skipControlID string, unsettled func(beads.Bead) bool) map[string]beads.Bead {
+	pending := make(map[string]beads.Bead)
+	for _, member := range members {
+		if member.ID == skipControlID || !unsettled(member) {
+			continue
+		}
+		if member.Metadata[beadmeta.KindMetadataKey] == beadmeta.KindSpec {
+			continue
+		}
+		switch member.Metadata[beadmeta.ScopeRoleMetadataKey] {
+		case "body", "teardown":
+			continue
+		}
+		pending[member.ID] = member
+	}
+	for _, member := range members {
+		switch strings.TrimSpace(member.Metadata[beadmeta.KindMetadataKey]) {
+		case "retry", "ralph":
+		default:
+			continue
+		}
+		switch member.Metadata[beadmeta.ScopeRoleMetadataKey] {
+		case "body", "teardown":
+			continue
+		}
+		for _, candidate := range all {
+			if !unsettled(candidate) {
+				continue
+			}
+			if !isLogicalDescendant(member, candidate) {
+				continue
+			}
+			pending[candidate.ID] = candidate
+		}
+	}
+	return pending
 }
 
 // describeStuckScopeMembers renders the members that are still pending after a
@@ -1325,7 +1341,10 @@ func preflightSourceBeadChain(rootStore beads.Store, rootID string, opts Process
 // closeSourceBeadChain walks gc.source_bead_id / gc.source_store_ref upward
 // from the just-finalized workflow root and closes every parent source bead
 // in its native store. A missing resolver for a cross-store ref, a deleted
-// parent, or a cycle stops the walk as a traced no-op.
+// parent, or a cycle stops the walk as a traced no-op. The walk also stops
+// after the first source whose closed work outcome withholds dependents
+// (gc.work_outcome=blocked): that source is closed or left closed, and its
+// parents stay open, because blocked work did not complete them.
 // Resolver, store read, and close failures are returned so the finalizer stays
 // open for retry. This is what makes "Adopt PR" city-scope source beads
 // disappear from the human-visible queue once the rig-scope workflow merges.
@@ -1459,20 +1478,23 @@ func walkSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptio
 				stopWalk = true
 				return nil
 			}
-			if !mutate {
-				return nil
+			if mutate {
+				if err := propagateSourceBeadTerminalMetadata(nextStore, loaded, current.Metadata); err != nil {
+					return fmt.Errorf("propagating source bead metadata %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
+				}
+				if loaded.Status == "closed" {
+					opts.tracef("close-source-chain root=%s skip reason=already_closed source=%s ref=%s", rootID, nextID, sourceChainStoreLabel(effectiveRef))
+				} else {
+					if err := closeSourceBeadPreservingOutcome(nextStore, loaded); err != nil {
+						return fmt.Errorf("closing source bead %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
+					}
+					opts.tracef("close-source-chain root=%s closed source=%s ref=%s preserved_outcome=%t", rootID, nextID, sourceChainStoreLabel(effectiveRef), strings.TrimSpace(loaded.Metadata[beadmeta.OutcomeMetadataKey]) != "")
+				}
 			}
-			if err := propagateSourceBeadTerminalMetadata(nextStore, loaded, current.Metadata); err != nil {
-				return fmt.Errorf("propagating source bead metadata %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
+			if sourceHoldsChain(loaded) {
+				opts.tracef("close-source-chain root=%s stop reason=blocked_source source=%s ref=%s", rootID, nextID, sourceChainStoreLabel(effectiveRef))
+				stopWalk = true
 			}
-			if loaded.Status == "closed" {
-				opts.tracef("close-source-chain root=%s skip reason=already_closed source=%s ref=%s", rootID, nextID, sourceChainStoreLabel(effectiveRef))
-				return nil
-			}
-			if err := closeSourceBeadPreservingOutcome(nextStore, loaded); err != nil {
-				return fmt.Errorf("closing source bead %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
-			}
-			opts.tracef("close-source-chain root=%s closed source=%s ref=%s preserved_outcome=%t", rootID, nextID, sourceChainStoreLabel(effectiveRef), strings.TrimSpace(loaded.Metadata[beadmeta.OutcomeMetadataKey]) != "")
 			return nil
 		}
 		if mutate && opts.SourceWorkflowLock != nil {
@@ -1660,6 +1682,14 @@ func sourceChainRootIDs(roots []beads.Bead) string {
 	}
 	sort.Strings(ids)
 	return strings.Join(ids, ",")
+}
+
+// sourceHoldsChain reports whether a source bead, once closed, keeps the
+// source chain above it open: the readiness rule that withholds a closed
+// blocked bead's dependents (beads.DependencySatisfied) withholds its
+// parents too.
+func sourceHoldsChain(source beads.Bead) bool {
+	return !beads.DependencySatisfied("closed", beads.ReadinessWorkOutcome(source.Metadata))
 }
 
 func closeSourceBeadPreservingOutcome(store beads.Store, bead beads.Bead) error {

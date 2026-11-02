@@ -845,6 +845,17 @@ Cities that had skipped the old formula orders (`mol-dog-jsonl`,
 `mol-dog-reaper`) stay opted out; the renamed orders honor the legacy
 skip entries.
 
+On a bead store that holds op rows (beads of type `op`, which ops recording
+writes), `reaper` does not run its wisp purge or its session prune. Both
+delete closed no-history beads, and bd deletes an op row without a tombstone
+unless it keeps that type. The reaper runs both again once the store's bd
+honors `types.retained` (its `bd purge --help` and `bd prune --help` name the
+setting) and the store's database names `op` there. Every writer of the store
+must run such a bd first; then set it with
+`gc bd config set types.retained op` (add `--rig <name>` for a rig store).
+Until then each run records the skipped step in its `order.skipped` event, and
+`gc doctor`'s `ops-recording` check warns about the store.
+
 ### Local-only vs push mode
 
 The archive operates in one of two modes, detected from the state of its
@@ -856,9 +867,10 @@ git remotes on every run:
   not backed up off-box, so a disk failure on this host loses the archive
   alongside the live Dolt data.
 - **Push.** An `origin` remote is configured. Each run rebases onto the
-  archive's checked-out branch on `origin` and pushes new commits to it so
-  the archive survives a host loss. The archive is created with the host's
-  `init.defaultBranch`, so that branch may be `master` rather than `main`.
+  archive branch on `origin` and pushes new commits to it so the archive
+  survives a host loss. The branch defaults to the archive's checked-out
+  branch, or `main` when HEAD is detached. Set `GC_JSONL_ARCHIVE_BRANCH`
+  to select a different remote branch.
 
 On each run `jsonl-export` logs the active mode to stderr on transitions
 (e.g. after you add or remove `origin`) and re-logs it at least weekly so

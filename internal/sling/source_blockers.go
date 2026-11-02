@@ -7,35 +7,23 @@ import (
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/beads"
-	convoycore "github.com/gastownhall/gascity/internal/convoy"
+	"github.com/gastownhall/gascity/internal/dispatch"
 )
 
-// sourceBlockerIDs returns the ids of the beads whose ready-blocking
-// dependencies keep beadID from being claimed, split into the ids the graph
-// store can resolve (blockerIDs, sorted) and the open ids it cannot
-// (unprojectable, sorted).
-//
-// A dependency row lives in one store's dep table and can only reference an id
-// that store resolves: the readiness reader left-joins the blocker row, so a
-// dangling target yields a status that is never "closed" and the dependent bead
-// drops out of Ready permanently. Workflow steps are created in
-// deps.graphStore(), so a blocker that store cannot resolve must not be
-// projected onto them. The caller records unprojectable ids instead, the way
-// drain does; refusing the launch would make every split-store source with an
-// out-of-store `blocks` edge unslingable.
-//
-// Closed blockers project on a single store — readiness ignores them there, and
-// dropping the edge would make the single- and split-store shapes disagree. A
-// closed blocker the graph store cannot resolve is dropped silently for the
-// same reason: it constrains nothing, so the missing edge loses no meaning.
-//
-// deps.Store is the work store that holds beadID and its dependency edges. When
-// graph is not relocated every id it resolves is co-resident, so the probe is
-// skipped entirely.
-func sourceBlockerIDs(deps SlingDeps, beadID string) (blockerIDs []string, unprojectable []string, err error) {
+type remoteSourceBlocker struct {
+	id        string
+	foundOpen bool
+}
+
+// sourceBlockerIDs classifies source dependencies as local blocker IDs,
+// remote blockers requiring a gate, and blockers absent from the available
+// serving stores. The release pass checks all serving stores before
+// closing a gate; a missing blocker therefore continues to hold the workflow.
+// Single-store launches retain their original direct edges.
+func sourceBlockerIDs(deps SlingDeps, beadID string) (blockerIDs []string, remote []remoteSourceBlocker, unresolved []string, err error) {
 	depsList, err := deps.Store.DepList(beadID, "down")
 	if err != nil {
-		return nil, nil, fmt.Errorf("listing dependencies of %s: %w", beadID, err)
+		return nil, nil, nil, fmt.Errorf("listing dependencies of %s: %w", beadID, err)
 	}
 	graphStore := deps.graphStore()
 	sameStore := deps.GraphStore == nil || deps.GraphStore == deps.Store
@@ -57,33 +45,74 @@ func sourceBlockerIDs(deps SlingDeps, beadID string) (blockerIDs []string, unpro
 			blockerIDs = append(blockerIDs, blockerID)
 			continue
 		} else if !errors.Is(err, beads.ErrNotFound) {
-			return nil, nil, fmt.Errorf("resolving blocker %s of %s in the workflow store: %w", blockerID, beadID, err)
+			return nil, nil, nil, fmt.Errorf("resolving blocker %s of %s in the workflow store: %w", blockerID, beadID, err)
 		}
-		blocker, err := deps.Store.Get(blockerID)
-		if errors.Is(err, beads.ErrNotFound) {
-			// Resolvable nowhere: the source's own edge already dangles.
-			// Projecting it would copy the dangle onto beads that can never
-			// be released by closing the real blocker.
-			unprojectable = append(unprojectable, blockerID)
-			continue
+		// Inspect every available serving store before treating a remote blocker
+		// as satisfied. A closed copy cannot release an open copy elsewhere.
+		stores := []beads.Store{deps.Store} // residency:allow — the selected source plus caller-supplied serving stores; every copy must be checked, not deduplicated by id
+		unread := false
+		if deps.SourceWorkflowStores != nil {
+			views, listErr := deps.SourceWorkflowStores()
+			unread = listErr != nil || (deps.SourceWorkflowScanIncomplete != nil && deps.SourceWorkflowScanIncomplete())
+			for _, view := range views {
+				if view.Store != nil {
+					stores = append(stores, view.Store)
+				} else {
+					unread = true
+				}
+			}
 		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("resolving blocker %s of %s in the work store: %w", blockerID, beadID, err)
+		found, holding := false, false
+		for _, store := range stores {
+			blocker, getErr := store.Get(blockerID)
+			if errors.Is(getErr, beads.ErrNotFound) {
+				continue
+			}
+			if getErr != nil {
+				unread = true
+				continue
+			}
+			found = true
+			if !beads.DependencySatisfied(blocker.Status, beads.ReadinessWorkOutcome(blocker.Metadata)) {
+				holding = true
+			}
 		}
-		if convoycore.IsTerminalStatus(blocker.Status) {
-			continue
+		if holding || unread || !found {
+			remote = append(remote, remoteSourceBlocker{id: blockerID, foundOpen: holding})
 		}
-		unprojectable = append(unprojectable, blockerID)
+		if !found && !unread {
+			unresolved = append(unresolved, blockerID)
+		}
+
 	}
 	slices.Sort(blockerIDs)
-	slices.Sort(unprojectable)
-	return blockerIDs, unprojectable, nil
+	slices.SortFunc(remote, func(a, b remoteSourceBlocker) int { return strings.Compare(a.id, b.id) })
+	slices.Sort(unresolved)
+	return blockerIDs, remote, unresolved, nil
 }
 
-// unprojectableBlockerWarning describes a workflow launched without a source
-// constraint it could not express. It names the source, the blockers, and the
-// root so the omission is attributable from the warning alone.
+// unprojectableBlockerWarning identifies source blockers absent from the
+// serving stores; their gates hold work until the release pass resolves them.
 func unprojectableBlockerWarning(beadID, rootID string, unprojectable []string) string {
-	return fmt.Sprintf("%s is blocked by %s, which the workflow store cannot resolve; workflow %s runs without that constraint",
+	return fmt.Sprintf("%s is blocked by %s, which the workflow store cannot resolve; workflow %s is held by a gate until the blocker is resolved",
 		beadID, strings.Join(unprojectable, ","), rootID)
+}
+
+func gateSourceBlockers(store beads.GraphStore, remote []remoteSourceBlocker) func(beads.Bead) ([]string, error) {
+	if len(remote) == 0 {
+		return nil
+	}
+	return func(root beads.Bead) ([]string, error) {
+		var ids []string
+		for _, blocker := range remote {
+			id, err := dispatch.EnsureCrossStoreGate(store, root, blocker.id, blocker.foundOpen)
+			if err != nil {
+				return nil, err
+			}
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids, nil
+	}
 }

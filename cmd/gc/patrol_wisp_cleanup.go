@@ -15,7 +15,12 @@ import (
 const patrolWispCloseReason = "gc shutdown: patrol wisp closed; role re-pours on start"
 
 // closePatrolWisps closes eligible patrol wisps in one store scope.
-func closePatrolWisps(store beads.Store, assignees []string) (int, error) {
+func closePatrolWisps(store interface {
+	List(beads.ListQuery) ([]beads.Bead, error)
+	DepList(id, direction string) ([]beads.Dep, error)
+	CloseAll([]string, map[string]string) (int, error)
+}, assignees []string,
+) (int, error) {
 	if store == nil || len(assignees) == 0 {
 		return 0, nil
 	}
