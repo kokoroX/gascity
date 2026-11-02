@@ -379,6 +379,7 @@ func computePoolDesiredStatesParkedAt(
 
 	var resumeRequests []SessionRequest
 	wakeRequestedTemplates := make(map[string]struct{})
+	freshWakeWorkIDs := make(map[string]struct{})
 
 	// Resume tier: actionable assigned work beads whose assignee resolves
 	// to a non-closed session bead. These sessions must stay alive. A bead's
@@ -456,6 +457,7 @@ func computePoolDesiredStatesParkedAt(
 						continue
 					}
 					wakeRequestedTemplates[template] = struct{}{}
+					freshWakeWorkIDs[wb.ID] = struct{}{}
 					resumeRequests = append(resumeRequests, SessionRequest{
 						Template:     template,
 						BeadPriority: beadPriorityRank(beadPriority(wb)),
@@ -553,14 +555,16 @@ func computePoolDesiredStatesParkedAt(
 		}
 		sessionInfoByID[info.ID] = info
 	}
-	// A wake-known request has assigned work but no surviving concrete session
-	// identity. Freshly completed unassigned pool sessions are valid concrete
-	// capacity for that request. Bind them before calculating residual protected
-	// demand so wake-known + protection cannot materialize the same capacity
-	// twice.
+	// Wake-known requests without a surviving work owner can use freshly
+	// completed pool sessions as concrete capacity. Bind those before calculating
+	// residual protected demand. Fresh-wake requests whose asleep session still
+	// owns the work must instead reach the realizer without a preferred seat.
 	for i := range resumeRequests {
 		req := &resumeRequests[i]
 		if req.Tier != "wake-known-identity" || req.SessionBeadID != "" {
+			continue
+		}
+		if _, ok := freshWakeWorkIDs[req.WorkBeadID]; ok {
 			continue
 		}
 		candidates := protectedNewRequests[req.Template]

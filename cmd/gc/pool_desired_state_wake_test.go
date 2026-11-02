@@ -286,6 +286,92 @@ func TestComputePoolDesiredStates_FreshWakeSkipsAsleepResume(t *testing.T) {
 	}
 }
 
+// TestComputePoolDesiredStates_FreshWakeKeepsProtectedSibling verifies that a
+// fresh-wake request for work owned by an asleep session is not bound to a
+// protected sibling seat, and that the sibling keeps its own protected demand.
+func TestComputePoolDesiredStates_FreshWakeKeepsProtectedSibling(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	agent := poolAgent("claude", "", intPtr(5), 0)
+	agent.WakeMode = "fresh"
+	cfg := &config.City{Agents: []config.Agent{agent}}
+	owner := poolSessionBeadWithState("sess-owner", "asleep", "")
+	sibling := protectedPoolSessionBeadAt("sess-sibling", now.Add(-time.Second))
+	work := workBead("work-1", "claude", owner.ID, "in_progress", 2)
+
+	result := ComputePoolDesiredStatesAt(cfg, []beads.Bead{work}, sessionInfosFromBeads([]beads.Bead{owner, sibling}), nil, now)
+	if len(result) != 1 {
+		t.Fatalf("desired states = %#v, want one", result)
+	}
+	var wake, protected bool
+	for _, req := range result[0].Requests {
+		if req.Tier == "wake-known-identity" && req.WorkBeadID == work.ID {
+			wake = true
+			if req.SessionBeadID != "" {
+				t.Errorf("fresh wake SessionBeadID = %q, want empty", req.SessionBeadID)
+			}
+		}
+		if req.Tier == "new" && req.SessionBeadID == sibling.ID {
+			protected = true
+		}
+	}
+	if !wake || !protected {
+		t.Errorf("wake = %t, protected sibling = %t, want both: %#v", wake, protected, result[0].Requests)
+	}
+}
+
+// TestComputePoolDesiredStates_WakeKnownIdentityBindsProtectedSibling verifies
+// that a wake-known request whose work has no surviving owner still binds a
+// protected sibling as concrete capacity.
+func TestComputePoolDesiredStates_WakeKnownIdentityBindsProtectedSibling(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	agent := poolAgent("claude", "", intPtr(5), 0)
+	agent.WakeMode = "fresh"
+	cfg := &config.City{Agents: []config.Agent{agent}}
+	sibling := protectedPoolSessionBeadAt("sess-sibling", now.Add(-time.Second))
+	closed := closedPoolSessionBead("sess-closed", "claude")
+	work := workBead("work-1", "claude", "claude", "in_progress", 2)
+
+	result := ComputePoolDesiredStatesAt(cfg, []beads.Bead{work}, sessionInfosFromBeads([]beads.Bead{closed, sibling}), nil, now)
+	if len(result) != 1 || len(result[0].Requests) != 1 {
+		t.Fatalf("desired states = %#v, want one request", result)
+	}
+	req := result[0].Requests[0]
+	if req.Tier != "wake-known-identity" || req.SessionBeadID != sibling.ID || req.WorkBeadID != work.ID {
+		t.Errorf("request = %#v, want wake bound to protected sibling and work", req)
+	}
+}
+
+// TestBuildDesiredState_FreshWakeSelectsOwnerWithProtectedSibling verifies
+// through the desired-state build that the owner and the protected sibling
+// both stay desired, and the sibling is not bound to the owner's work.
+func TestBuildDesiredState_FreshWakeSelectsOwnerWithProtectedSibling(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	agent := poolAgent("claude", "", intPtr(5), 0)
+	agent.WakeMode = "fresh"
+	agent.StartCommand = "true"
+	cfg := &config.City{Agents: []config.Agent{agent}}
+	owner := poolSessionBeadWithState("sess-owner", "asleep", "")
+	sibling := protectedPoolSessionBeadAt("sess-sibling", now.Add(-time.Second))
+	work := workBead("work-1", "claude", owner.ID, "in_progress", 2)
+	snapshot := newSessionBeadSnapshot([]beads.Bead{owner, sibling})
+	store := beads.NewMemStoreFrom(1, []beads.Bead{owner, sibling, work}, nil)
+
+	desired := buildDesiredStateWithSessionBeadsAt("test-city", t.TempDir(), now, now, cfg, runtime.NewFake(), store, nil, snapshot, nil, io.Discard)
+	if _, ok := desired.State[owner.Metadata["session_name"]]; !ok {
+		t.Errorf("owner %s missing from desired state: %#v", owner.ID, desired.State)
+	}
+	if _, ok := desired.State[sibling.Metadata["session_name"]]; !ok {
+		t.Errorf("protected sibling %s missing from desired state: %#v", sibling.ID, desired.State)
+	}
+	info, ok := snapshot.FindInfoByID(sibling.ID)
+	if !ok {
+		t.Fatalf("protected sibling %s missing from snapshot", sibling.ID)
+	}
+	if info.TriggerBeadID == work.ID {
+		t.Errorf("protected sibling %s was bound to owner work %s", sibling.ID, work.ID)
+	}
+}
+
 // TestBuildDesiredState_PoolCreateSkipsWorkOwnedByAnotherSession verifies that
 // work held by another session reuses the holder's row instead of creating a
 // seat, while unassigned routed work still creates a new seat.
