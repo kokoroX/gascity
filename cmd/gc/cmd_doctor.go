@@ -711,9 +711,9 @@ func doDoctor(opts doctorOpts, stdout, stderr io.Writer) int {
 	// Identical bd reads are shared across this run's checks; see bdReadMemo.
 	defer installDoctorBdReadMemo(d, cityPath)()
 	ctx := &doctor.CheckContext{CityPath: cityPath, Verbose: opts.Verbose}
-	// Reporting configuration problems is this command's job, so its
-	// advisories are not subject to the interactive-only policy in
-	// config_advisory_policy.go.
+	// Reporting configuration problems is this command's job, so it opts in
+	// to config-load advisories with the policy's reporting writer
+	// (config_advisory_policy.go).
 	cfg, cfgErr := loadCityConfig(cityPath, advisoryReportingWriter{stderr})
 	if cfgErr == nil {
 		resolveRigPaths(cityPath, cfg.Rigs)

@@ -243,7 +243,6 @@ func TestDoAgentResumePackDerivedError(t *testing.T) {
 }
 
 func TestLoadCityConfigFSEmitsProvenanceWarnings(t *testing.T) {
-	assumeInteractiveConfigAdvisories(t)
 	fs := fsys.NewFake()
 	fs.Files["/city/city.toml"] = []byte(`[workspace]
 name = "test-city"
@@ -257,7 +256,7 @@ schema = 2
 `)
 
 	var stderr bytes.Buffer
-	cfg, err := loadCityConfigFS(fs, "/city/city.toml", &stderr)
+	cfg, err := loadCityConfigFS(fs, "/city/city.toml", advisoryReportingWriter{&stderr})
 	if err != nil {
 		t.Fatalf("loadCityConfigFS: %v", err)
 	}
@@ -270,7 +269,6 @@ schema = 2
 }
 
 func TestLoadCityConfigFSToleratesMissingNamedSessionTemplate(t *testing.T) {
-	assumeInteractiveConfigAdvisories(t)
 	fs := fsys.NewFake()
 	fs.Dirs["/city/pk"] = true
 	fs.Files["/city/pk/pack.toml"] = []byte(`[pack]
@@ -300,7 +298,7 @@ schema = 2
 `)
 
 	var stderr bytes.Buffer
-	cfg, err := loadCityConfigFS(fs, "/city/city.toml", &stderr)
+	cfg, err := loadCityConfigFS(fs, "/city/city.toml", advisoryReportingWriter{&stderr})
 	if err != nil {
 		t.Fatalf("loadCityConfigFS: %v; a single broken named session must not brick config load", err)
 	}
@@ -319,7 +317,6 @@ schema = 2
 }
 
 func TestLoadCityConfigFSEmitsMigrationWarningsAcrossCalls(t *testing.T) {
-	assumeInteractiveConfigAdvisories(t)
 	fs := fsys.NewFake()
 	fs.Files["/city/city.toml"] = []byte(`[workspace]
 name = "test-city"
@@ -334,7 +331,7 @@ schema = 2
 
 	var stderr bytes.Buffer
 	for i := 0; i < 2; i++ {
-		cfg, err := loadCityConfigFS(fs, "/city/city.toml", &stderr)
+		cfg, err := loadCityConfigFS(fs, "/city/city.toml", advisoryReportingWriter{&stderr})
 		if err != nil {
 			t.Fatalf("loadCityConfigFS call %d: %v", i+1, err)
 		}
@@ -463,7 +460,7 @@ func TestResolveAgentIdentityUsesRigContextForScopeUnqualifiedControlDispatcher(
 func TestEmitLoadCityConfigWarningsFiltersNonMigrationWarnings(t *testing.T) {
 	var stderr bytes.Buffer
 	// This case is about which warnings survive the content filter, not about
-	// where they are delivered: wrap the buffer so the interactive-only
+	// where they are delivered: wrap the buffer as a reporting writer so the
 	// delivery policy (config_advisory_policy.go) does not drop them.
 	emitLoadCityConfigWarnings(advisoryReportingWriter{&stderr}, &config.Provenance{
 		Warnings: []string{

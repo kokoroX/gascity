@@ -180,18 +180,39 @@ func TestAgentIsForeign_CannotAnswerExitsTwo(t *testing.T) {
 
 // TestAgentIsForeign_WarningsStayOffStdout guards the parse contract: a caller
 // reads stdout as JSON, so a config-load warning there would make a healthy
-// verdict unparseable, which the fail-closed rule turns into a protect.
+// verdict unparseable, which the fail-closed rule turns into a protect. The
+// command itself prints no config advisories — the policy in
+// config_advisory_policy.go delivers them only to a reporting command — so
+// non-vacuity comes from loading the same city through a reporting writer and
+// checking none of its warnings appear on stdout.
 func TestAgentIsForeign_WarningsStayOffStdout(t *testing.T) {
 	cityPath, _, _ := isForeignTestCity(t)
 
+	// Run the command first: the policy drops its advisories before they can
+	// consume the once-per-city builtin-import slot, so the reporting load
+	// below sees the same warnings either way.
 	code, out, raw, stderr := runIsForeign(t, isForeignArgs(cityPath, "repo/worker")...)
-	// Non-vacuity: this only proves anything if a warning was produced. The
-	// fixture declares the rig path in city.toml, which the loader warns about.
-	if strings.TrimSpace(stderr) == "" {
-		t.Fatal("fixture produced no config warning, so this test cannot show that warnings stay off stdout")
-	}
 	if code != agentIsForeignExitLocal || out.Identity != "repo/worker" {
 		t.Fatalf("exit = %d, identity = %q; want 0 and repo/worker\nstdout: %s\nstderr: %s", code, out.Identity, raw, stderr)
+	}
+
+	// Non-vacuity: this only proves anything if the fixture produces a config
+	// warning at all. The fixture declares the rig path in city.toml and no
+	// builtin imports, both of which the loader warns about.
+	var reported bytes.Buffer
+	if _, err := loadCityConfig(cityPath, advisoryReportingWriter{&reported}); err != nil {
+		t.Fatalf("loadCityConfig: %v", err)
+	}
+	if strings.TrimSpace(reported.String()) == "" {
+		t.Fatal("fixture produced no config warning, so this test cannot show that warnings stay off stdout")
+	}
+	for _, warning := range strings.Split(strings.TrimSpace(reported.String()), "\n") {
+		if warning = strings.TrimSpace(warning); warning == "" {
+			continue
+		}
+		if strings.Contains(raw, warning) {
+			t.Fatalf("stdout carries the config warning %q, which breaks the JSON parse contract:\n%s", warning, raw)
+		}
 	}
 }
 

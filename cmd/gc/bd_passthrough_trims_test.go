@@ -379,21 +379,23 @@ func TestBdPassthroughReadinessDeferralIsScoped(t *testing.T) {
 }
 
 // TestGcBdDoesNotPrintTheMissingBuiltinImportHint pins where that hint lives:
-// gc status, gc start and gc doctor print it (TestStatusWarnsOnMissingBuiltinImports),
-// the gc bd data-plane passthrough does not.
+// a reporting command's load gets it (gc doctor's builtin import check reports
+// the missing packs regardless, and a reporting writer load gets the hint), the
+// gc bd data-plane passthrough does not.
 func TestGcBdDoesNotPrintTheMissingBuiltinImportHint(t *testing.T) {
 	clearGCEnv(t)
 	newSingleExecTestCity(t)
 	cityDir := os.Getenv("GC_CITY_PATH")
-	// The control: a full load with a visible writer does print it for this
-	// city, so the assertion below is about gc bd and not about the fixture.
+	// The control: a full load through a reporting writer does print it for
+	// this city, so the assertion below is about gc bd and not about the
+	// fixture.
 	builtinImportWarningCache.Delete(normalizePathForCompare(cityDir))
 	var full bytes.Buffer
-	if _, err := loadCityConfig(cityDir, &full); err != nil {
+	if _, err := loadCityConfig(cityDir, advisoryReportingWriter{&full}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(full.String(), "does not import required builtin pack") {
-		t.Fatalf("a full load printed no missing-import hint for the fixture; stderr=%q", full.String())
+		t.Fatalf("a reporting load printed no missing-import hint for the fixture; stderr=%q", full.String())
 	}
 	builtinImportWarningCache.Delete(normalizePathForCompare(cityDir))
 
@@ -406,14 +408,13 @@ func TestGcBdDoesNotPrintTheMissingBuiltinImportHint(t *testing.T) {
 	}
 }
 
-// TestGcBdStillPrintsConfigLoadWarnings pins that skipping the import scan did
-// not take the composition's own warnings with it. That is about gc bd still
-// producing the composition's warnings, not about where they are delivered:
-// since config_advisory_policy.go they reach a non-interactive stderr only for
-// a reporting command, which gc bd is not (and must not be — it is an agent's
-// hottest command), so this case asserts the interactive delivery.
-func TestGcBdStillPrintsConfigLoadWarnings(t *testing.T) {
-	assumeInteractiveConfigAdvisories(t)
+// TestGcBdStillProducesConfigLoadWarnings pins that skipping the import scan
+// did not take the composition's own warnings out of the passthrough loader.
+// Delivery is separate: gc bd is not a reporting command (and must not be — it
+// is an agent's hottest command), so its own stderr stays clean under the
+// policy in config_advisory_policy.go while a reporting writer still gets the
+// warning.
+func TestGcBdStillProducesConfigLoadWarnings(t *testing.T) {
 	cityDir := newBdTrimsTestCity(t)
 	f, err := os.OpenFile(filepath.Join(cityDir, "city.toml"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -425,13 +426,24 @@ func TestGcBdStillPrintsConfigLoadWarnings(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
+	const warning = "[agents] is a deprecated compatibility alias"
+	var reported bytes.Buffer
+	endScope := beginInvocationConfigMemo()
+	_, loadErr := loadCityConfigForBdPassthrough(cityDir, advisoryReportingWriter{&reported})
+	endScope()
+	if loadErr != nil {
+		t.Fatalf("loadCityConfigForBdPassthrough: %v", loadErr)
+	}
+	if n := strings.Count(reported.String(), warning); n != 1 {
+		t.Fatalf("gc bd's loader emitted the config warning %d times, want 1; stderr=%q", n, reported.String())
+	}
+
 	var stdout, stderr bytes.Buffer
 	if code := doBd([]string{"show", "demo-abc"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("doBd(show) = %d; stderr=%q", code, stderr.String())
 	}
-	const warning = "[agents] is a deprecated compatibility alias"
-	if n := strings.Count(stderr.String(), warning); n != 1 {
-		t.Fatalf("gc bd printed the config warning %d times, want 1; stderr=%q", n, stderr.String())
+	if strings.Contains(stderr.String(), warning) {
+		t.Fatalf("gc bd printed the config warning: %q", stderr.String())
 	}
 }
 
@@ -455,8 +467,8 @@ func TestGcBdValidationErrorsMatchTheFullLoad(t *testing.T) {
 	}
 
 	oldCode, oldStderr, _ := run(true)
-	// The one intended difference: the legacy full load also printed the
-	// missing-builtin-import hint.
+	// Ordinary commands do not deliver the hint (config_advisory_policy.go);
+	// the filter keeps the parity comparison independent of that policy.
 	oldStderr = dropMissingBuiltinImportHint(oldStderr)
 	newCode, newStderr, got := run(false)
 	if oldCode != newCode || oldStderr != newStderr {
@@ -666,9 +678,9 @@ func TestBdPassthroughConfigAppliesFeatureFlags(t *testing.T) {
 	})
 }
 
-// dropMissingBuiltinImportHint removes the missing-builtin-import hint, which
-// the legacy full load prints and gc bd no longer does
-// (TestGcBdDoesNotPrintTheMissingBuiltinImportHint), from captured stderr.
+// dropMissingBuiltinImportHint removes the missing-builtin-import hint from
+// captured stderr, so parity comparisons do not depend on whether a command
+// delivers it (config_advisory_policy.go).
 func dropMissingBuiltinImportHint(s string) string {
 	var kept []string
 	for _, line := range strings.SplitAfter(s, "\n") {
