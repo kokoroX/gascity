@@ -70,6 +70,7 @@ type ProfileBackend interface {
 	ProcessTableScanner
 	ProgramCaptureHealer
 	ProgramStatusProvider
+	ProgramStatusFreshReader
 	ProgramStatusShadowProvider
 	RelaunchProvider
 	ServerDeathConfirmer
@@ -119,6 +120,7 @@ func NewFakeProfile(p Profile, b ProfileBackend) Provider {
 			ProcessTableScanner:           b,
 			ProgramCaptureHealer:          b,
 			ProgramStatusProvider:         b,
+			ProgramStatusFreshReader:      b,
 			ProgramStatusShadowProvider:   b,
 			RelaunchProvider:              b,
 			ServerDeathConfirmer:          b,
@@ -229,6 +231,7 @@ type (
 		ProcessTableScanner
 		ProgramCaptureHealer
 		ProgramStatusProvider
+		ProgramStatusFreshReader
 		ProgramStatusShadowProvider
 		RelaunchProvider
 		ServerDeathConfirmer

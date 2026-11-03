@@ -368,13 +368,8 @@ func TestShadowCompareHoldJudgesAfterItsActivityRead(t *testing.T) {
 	}
 }
 
-// Kills a sleep proof (proved_idle) judged on the leaf's cached reading, or
-// whose recording changes the proof: the record's own proof takes two fresh
-// readings, one on each side of the proof, so a turn that ran inside it
-// fails the record's proof; the verdict returned is the scan's alone, with
-// its proof's context marked as recorded by its caller, and a leaf that is
-// not shadowing is read nothing.
-func TestShadowIdleProofReadsFreshAroundTheProof(t *testing.T) {
+// A shadow proof compares fresh readings without changing the scan's verdict.
+func TestProgramIdleProofReadsFreshAroundTheProof(t *testing.T) {
 	quiet := armedRow()
 	quiet.Mode = runtime.ProgramStatusShadow
 	quiet.Record.State, quiet.Record.Seq, quiet.Record.TurnEnds = runtime.ProgramIdle, 4, 1
@@ -396,7 +391,7 @@ func TestShadowIdleProofReadsFreshAroundTheProof(t *testing.T) {
 			f.SetProgramPane("s", quiet)
 			var got []runtime.ProgramStatusComparison
 			f.ProgramShadowSink = func(c runtime.ProgramStatusComparison) { got = append(got, c) }
-			proved := runtime.ShadowIdleProof(t.Context(), runtime.FullFake{Fake: f}, "s", func(ctx context.Context) bool {
+			proved := runtime.ProgramIdleProof(t.Context(), runtime.FullFake{Fake: f}, "s", func(ctx context.Context) bool {
 				if !runtime.ShadowCallerRecords(ctx) {
 					t.Error("the proof's context is not marked as recorded by its caller")
 				}
@@ -404,7 +399,7 @@ func TestShadowIdleProofReadsFreshAroundTheProof(t *testing.T) {
 				return false
 			})
 			if proved {
-				t.Fatal("ShadowIdleProof returned a verdict other than the proof's")
+				t.Fatal("ProgramIdleProof returned a verdict other than the proof's")
 			}
 			if len(got) != 1 || got[0].Point != runtime.ProgramPointProvedIdle || got[0].Scrape != runtime.ProgramVerdictBusy || got[0].Program != c.program {
 				t.Fatalf("recorded %+v, want one proved_idle busy/%s", got, c.program)
@@ -421,7 +416,7 @@ func TestShadowIdleProofReadsFreshAroundTheProof(t *testing.T) {
 		}
 		f.SetProgramPane("s", quiet)
 		marked := false
-		proved := runtime.ShadowIdleProof(t.Context(), runtime.FullFake{Fake: f}, "s", func(ctx context.Context) bool {
+		proved := runtime.ProgramIdleProof(t.Context(), runtime.FullFake{Fake: f}, "s", func(ctx context.Context) bool {
 			marked = runtime.ShadowCallerRecords(ctx)
 			return true
 		})
@@ -432,6 +427,157 @@ func TestShadowIdleProofReadsFreshAroundTheProof(t *testing.T) {
 			t.Fatalf("a leaf with no sink was read %d times", reads)
 		}
 	})
+}
+
+func TestProgramIdleProofOn(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		state                runtime.ProgramState
+		invalid, proof, want bool
+	}{
+		{"quiescent", runtime.ProgramIdle, false, false, true},
+		{"working", runtime.ProgramWorking, false, true, false},
+		{"invalid true", runtime.ProgramIdle, true, true, true},
+		{"invalid false", runtime.ProgramIdle, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := runtime.NewFake()
+			if err := f.Start(t.Context(), "s", runtime.Config{}); err != nil {
+				t.Fatal(err)
+			}
+			row := armedRow()
+			row.Mode = runtime.ProgramStatusOn
+			row.Record.State, row.Record.Seq, row.Record.TurnEnds = tc.state, 4, 1
+			if tc.state == runtime.ProgramWorking {
+				row.Record.TurnStarts = 2
+			}
+			if tc.invalid {
+				row.RecordForm = runtime.ProgramRecordAbsent
+			}
+			f.SetProgramPane("s", row)
+			f.ProgramShadowSink = func(runtime.ProgramStatusComparison) { t.Error("on mode recorded a shadow comparison") }
+			got := runtime.ProgramIdleProof(t.Context(), runtime.FullFake{Fake: f}, "s", func(context.Context) bool { return tc.proof })
+			if reads := methodCalls(f, "ProgramStatusFreshRead"); reads != 2 {
+				t.Fatalf("fresh reads = %d, want 2", reads)
+			}
+			if got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProgramIdleProofFallback(t *testing.T) {
+	f := runtime.NewFake()
+	if err := f.Start(t.Context(), "s", runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	row := armedRow()
+	row.Mode = runtime.ProgramStatusOff
+	f.SetProgramPane("s", row)
+	for _, p := range []runtime.Provider{f, runtime.FullFake{Fake: f}} {
+		for _, proof := range []bool{false, true} {
+			if got := runtime.ProgramIdleProof(t.Context(), p, "s", func(context.Context) bool { return proof }); got != proof {
+				t.Fatalf("fallback = %v, want %v", got, proof)
+			}
+		}
+	}
+	if reads := methodCalls(f, "ProgramStatusFreshRead") + methodCalls(f, "ProgramStatusShadowRead") + methodCalls(f, "ProgramStatus"); reads != 0 {
+		t.Fatalf("off mode made %d reads", reads)
+	}
+}
+
+func TestProgramIdleProofOnReadFailure(t *testing.T) {
+	f := runtime.NewFake()
+	if err := f.Start(t.Context(), "s", runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	row := armedRow()
+	row.Mode = runtime.ProgramStatusOn
+	row.Record.State, row.Record.Seq, row.Record.TurnEnds = runtime.ProgramIdle, 4, 1
+	f.SetProgramPane("s", row)
+	got := runtime.ProgramIdleProof(t.Context(), runtime.FullFake{Fake: f}, "s", func(context.Context) bool {
+		f.SetProgramPane("s", runtime.ProgramPaneRow{Mode: runtime.ProgramStatusOff})
+		return false
+	})
+	if got {
+		t.Fatal("failed second read must fall back to the proof")
+	}
+}
+
+type idleProofReading struct {
+	status runtime.ProgramStatus
+	ok     bool
+}
+
+type idleProofReader struct {
+	runtime.Provider
+	readings []idleProofReading
+	reads    int
+}
+
+func (r *idleProofReader) ProgramStatusFreshRead(string) (runtime.ProgramStatus, bool) {
+	index := r.reads
+	r.reads++
+	if index >= len(r.readings) {
+		return runtime.ProgramStatus{}, false
+	}
+	return r.readings[index].status, r.readings[index].ok
+}
+
+func TestProgramIdleProofReadingTransitions(t *testing.T) {
+	quiet := valid(runtime.ProgramIdle, 4, 1)
+	quiet.TurnEnds = 1
+	otherMode := quiet
+	otherMode.Mode = runtime.ProgramStatusShadow
+	changedSeq := quiet
+	changedSeq.Seq++
+	changedNonce := quiet
+	changedNonce.Nonce = "r2.%3"
+	for _, tc := range []struct {
+		name     string
+		readings []idleProofReading
+		proof    bool
+		want     bool
+		reads    int
+	}{
+		{"first read failed", []idleProofReading{{ok: false}}, true, true, 1},
+		{"first mode changed", []idleProofReading{{otherMode, true}}, false, false, 1},
+		{"second mode changed", []idleProofReading{{quiet, true}, {otherMode, true}}, true, true, 2},
+		{"sequence changed", []idleProofReading{{quiet, true}, {changedSeq, true}}, true, false, 2},
+		{"nonce changed", []idleProofReading{{quiet, true}, {changedNonce, true}}, true, false, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &idleProofReader{Provider: runtime.NewFake(), readings: tc.readings}
+			got := runtime.ProgramIdleProof(t.Context(), r, "s", func(context.Context) bool { return tc.proof })
+			if got != tc.want || r.reads != tc.reads {
+				t.Fatalf("verdict = %v, reads = %d; want %v, %d", got, r.reads, tc.want, tc.reads)
+			}
+		})
+	}
+}
+
+func TestProgramIdleProofMissingProviderOrName(t *testing.T) {
+	reader := &idleProofReader{Provider: runtime.NewFake()}
+	for _, tc := range []struct {
+		name     string
+		provider runtime.Provider
+		session  string
+	}{
+		{"nil provider", nil, "s"},
+		{"empty name", reader, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, proof := range []bool{false, true} {
+				if got := runtime.ProgramIdleProof(t.Context(), tc.provider, tc.session, func(context.Context) bool { return proof }); got != proof {
+					t.Fatalf("verdict = %v, want %v", got, proof)
+				}
+			}
+		})
+	}
+	if reader.reads != 0 {
+		t.Fatalf("empty name made %d fresh reads", reader.reads)
+	}
 }
 
 // methodCalls counts the calls f recorded to method.

@@ -228,6 +228,65 @@ func TestReconcileDetachedAtUsesRoutedSleepCapability(t *testing.T) {
 	}
 }
 
+func TestReconcileSessionBeads_ProgramStatusIdleDrain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state runtime.ProgramState
+		idle  bool
+	}{
+		{"quiescent", runtime.ProgramIdle, true},
+		{"working", runtime.ProgramWorking, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newReconcilerTestEnv(t)
+			env.cfg = &config.City{Session: config.SessionConfig{ProgramStatus: "on"}, Agents: []config.Agent{{Name: "worker", SleepAfterIdle: "60s"}}}
+			env.addDesired("worker", "worker", true)
+			session := env.createSessionBead("worker", "worker")
+			ts := env.clk.Time.Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+			env.setSessionMetadata(&session, map[string]string{"last_woke_at": ts, "detached_at": ts})
+			env.sp.SetActivity("worker", env.clk.Time.Add(-2*time.Minute))
+			status := runtime.ProgramStatus{State: tc.state, Nonce: "r1.%3", Seq: 2, TurnStarts: 1, Progress: -1, Reported: true, Since: env.clk.Time.Add(-time.Minute)}
+			if tc.idle {
+				status.TurnEnds = 1
+			}
+			env.sp.SetProgramPane("worker", runtime.ProgramPaneRow{Mode: runtime.ProgramStatusOn, CaptureGate: true, PaneID: "%3", PanePipe: true, Tap: "r1.%3", TapLiveness: runtime.ProgramTapAlive, RecordForm: runtime.ProgramRecordDecoded, Record: status})
+			if tc.idle {
+				env.sp.WaitForIdleErrors["worker"] = runtime.ErrIdleIndeterminate
+			} else {
+				env.sp.WaitForIdleErrors["worker"] = nil
+			}
+			gate := make(chan struct{})
+			env.sp.WaitForIdleGates["worker"] = gate
+			sp := runtime.FullFake{Fake: env.sp}
+			poolDesired := map[string]int{"worker": 1}
+			cfgNames := configuredSessionNames(env.cfg, "", env.store)
+			reconcileSessionBeadsAtPath(context.Background(), env.city, []beads.Bead{session}, env.desiredState, cfgNames, env.cfg, sp,
+				env.store, nil, nil, nil, nil, env.dt, poolDesired, false, nil, "", nil, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+				withAsyncDrainAckStopTracker(env.stops))
+			close(gate)
+			waitForIdleProbeReady(t, env.dt, session.ID)
+			probe, _ := env.dt.idleProbe(session.ID)
+			if probe.success != tc.idle {
+				t.Fatalf("probe success = %v, want %v", probe.success, tc.idle)
+			}
+			fresh, err := env.store.Get(session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reconcileSessionBeadsAtPath(context.Background(), env.city, []beads.Bead{fresh}, env.desiredState, cfgNames, env.cfg, sp,
+				env.store, nil, nil, nil, nil, env.dt, poolDesired, false, nil, "", nil, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+				withAsyncDrainAckStopTracker(env.stops))
+			drain := env.dt.get(session.ID)
+			if (drain != nil) != tc.idle {
+				t.Fatalf("drain = %+v, want idle drain %v", drain, tc.idle)
+			}
+			if drain != nil && drain.reason != "idle" {
+				t.Fatalf("drain reason = %q", drain.reason)
+			}
+		})
+	}
+}
+
 func TestReconcileSessionBeads_StartsIdleDrainAfterGrace(t *testing.T) {
 	env := newReconcilerTestEnv(t)
 	env.cfg = &config.City{

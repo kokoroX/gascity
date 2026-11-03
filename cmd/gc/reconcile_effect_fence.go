@@ -152,9 +152,9 @@ func (p *effectPass) readSignalWork(row session.Info, it intent) *txWork {
 
 // provedIdle is legacy's idle probe (shouldBeginIdleDrainInfo) on leaf:
 // WaitForIdle succeeds, and the runtime reports no activity after the pass
-// began. It is recorded as an idle proof (runtime.ShadowIdleProof).
+// began. It is recorded as an idle proof (runtime.ProgramIdleProof).
 func provedIdle(ctx context.Context, leaf runtime.Provider, name string, passNow time.Time) bool {
-	return runtime.ShadowIdleProof(ctx, leaf, name, func(ctx context.Context) bool {
+	return runtime.ProgramIdleProof(ctx, leaf, name, func(ctx context.Context) bool {
 		return legacyProvedIdle(ctx, leaf, name, passNow)
 	})
 }

@@ -158,7 +158,18 @@ func (p *Provider) ProgramStatusShadowRead(name string) (runtime.ProgramStatus, 
 	return p.tm.shadowRead(name)
 }
 
-var _ runtime.ProgramStatusShadowProvider = (*Provider)(nil)
+// ProgramStatusFreshRead implements [runtime.ProgramStatusFreshReader] for on mode.
+func (p *Provider) ProgramStatusFreshRead(name string) (runtime.ProgramStatus, bool) {
+	if p.tm.programStatusMode() != runtime.ProgramStatusOn {
+		return runtime.ProgramStatus{}, false
+	}
+	return p.tm.programFreshRead(name)
+}
+
+var (
+	_ runtime.ProgramStatusShadowProvider = (*Provider)(nil)
+	_ runtime.ProgramStatusFreshReader    = (*Provider)(nil)
+)
 
 // shadowGo runs fn on a background goroutine when a slot is free, and
 // otherwise drops it, counting the drop against the next comparison. The
@@ -232,7 +243,15 @@ const programFreshFormat = "#{pane_dead}\t" + programPaneFormat + "\t" + runtime
 // session is not a session name, or the read failed: there is nothing to
 // compare.
 func (t *Tmux) shadowRead(session string) (runtime.ProgramStatus, bool) {
-	if !t.shadowing() || !validSessionNameRe.MatchString(session) {
+	if !t.shadowing() {
+		return runtime.ProgramStatus{}, false
+	}
+	return t.programFreshRead(session)
+}
+
+// programFreshRead reads the agent pane past the state cache.
+func (t *Tmux) programFreshRead(session string) (runtime.ProgramStatus, bool) {
+	if !validSessionNameRe.MatchString(session) {
 		return runtime.ProgramStatus{}, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), shadowReadTimeout)

@@ -784,7 +784,7 @@ const idleProofsPerHour = 400
 // Kills an idle proof that records a tmux-level wait_for_idle beside its own
 // proved_idle: an hour of failed proofs on a busy seat records nothing at
 // the leaf, takes no record read and holds no background slot.
-func TestShadowIdleProofRecordsNoWaitForIdle(t *testing.T) {
+func TestProgramIdleProofRecordsNoWaitForIdle(t *testing.T) {
 	// Each failed wait sleeps one idle poll; the bubble's clock makes an
 	// hour of them take no wall time.
 	synctest.Test(t, func(t *testing.T) {
@@ -1185,15 +1185,33 @@ func (record listingExecutor) executeCtx(_ context.Context, args []string) (stri
 	return record.execute(args)
 }
 
-// Kills a sleep proof (proved_idle) whose two readings are one cached
-// snapshot (review finding: proved_idle on cached readings). The state cache
-// answers a session's reading from one listing for its whole TTL, longer
-// than a proof takes, so two cached reads around a proof inside which a turn
-// ran prove the program quiescent. Through the tmux provider and its state
-// cache, with the record moving inside the cache's TTL, the proof's two
-// readings are taken fresh from the session: the turn shows and fails the
-// record's proof, and with no turn the proof holds.
-func TestShadowIdleProofTakesTwoObservations(t *testing.T) {
+// On mode reads a fresh status; off mode does not read the pane.
+func TestProgramStatusFreshReadOnAndOff(t *testing.T) {
+	quiet := psRecord(t, readNonce, runtime.ProgramIdle, liveSince, func(s *runtime.ProgramStatus) {
+		s.Seq, s.TurnStarts, s.TurnEnds, s.QuietSince = 3, 1, 1, time.Now()
+	})
+	for _, mode := range []runtime.ProgramStatusMode{runtime.ProgramStatusOn, runtime.ProgramStatusOff} {
+		t.Run(string(mode), func(t *testing.T) {
+			current := func() string { return quiet }
+			tm, ex := shadowTmux(mode, listingExecutor(current), func(int) string { return current() }, nil)
+			p := &Provider{tm: tm, cfg: tm.cfg, workDirs: map[string]string{}}
+			got, ok := p.ProgramStatusFreshRead("s")
+			if ok != (mode == runtime.ProgramStatusOn) {
+				t.Fatalf("read = %+v, %v for mode %s", got, ok, mode)
+			}
+			if mode == runtime.ProgramStatusOn && got.Mode != mode {
+				t.Fatalf("mode = %s, want %s", got.Mode, mode)
+			}
+			if mode == runtime.ProgramStatusOff && ex.programReads() != 0 {
+				t.Fatal("off mode read the pane")
+			}
+		})
+	}
+}
+
+// The idle proof reads past the state cache on both sides of the proof, so
+// a turn inside the cache's TTL appears in the shadow comparison.
+func TestProgramIdleProofTakesTwoObservations(t *testing.T) {
 	quiet := psRecord(t, readNonce, runtime.ProgramIdle, liveSince, func(s *runtime.ProgramStatus) {
 		s.Seq, s.TurnStarts, s.TurnEnds, s.QuietSince = 3, 1, 1, time.Now()
 	})
@@ -1223,12 +1241,12 @@ func TestShadowIdleProofTakesTwoObservations(t *testing.T) {
 			if s, err := p.ProgramStatus("s"); err != nil || s.Seq != 3 {
 				t.Fatalf("cached reading %+v, %v; want the quiet record", s, err)
 			}
-			proved := runtime.ShadowIdleProof(context.Background(), p, "s", func(context.Context) bool {
+			proved := runtime.ProgramIdleProof(context.Background(), p, "s", func(context.Context) bool {
 				record.Store(&c.after)
 				return true
 			})
 			if !proved {
-				t.Fatal("ShadowIdleProof returned a verdict other than the proof's")
+				t.Fatal("ProgramIdleProof returned a verdict other than the proof's")
 			}
 			if s, err := p.ProgramStatus("s"); err != nil || s.Seq != 3 {
 				t.Fatalf("cached reading %+v, %v after the proof; want the listing from before it, which two cached reads would both have judged", s, err)

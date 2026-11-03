@@ -10,6 +10,7 @@ var (
 	_ ProgramCaptureHealer  = FullFake{}
 
 	_ ProgramStatusShadowProvider = FullFake{}
+	_ ProgramStatusFreshReader    = FullFake{}
 )
 
 // SetProgramPane sets session name's agent-pane row ([Fake.ProgramPanes])
@@ -70,6 +71,21 @@ func (f FullFake) ProgramStatusShadowRead(name string) (ProgramStatus, bool) {
 		return ProgramStatus{}, false
 	}
 	return JudgeProgramStatus(f.ProgramPanes[name]), true
+}
+
+// ProgramStatusFreshRead implements [ProgramStatusFreshReader] for on mode.
+func (f FullFake) ProgramStatusFreshRead(name string) (ProgramStatus, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row := f.ProgramPanes[name]
+	if row.Mode != ProgramStatusOn {
+		return ProgramStatus{}, false
+	}
+	f.Calls = append(f.Calls, Call{Method: "ProgramStatusFreshRead", Name: name})
+	if f.programReadableLocked(name) != nil || f.ProgramStatusErrors[name] != nil {
+		return ProgramStatus{}, false
+	}
+	return JudgeProgramStatus(row), true
 }
 
 // HealProgramCapture implements [ProgramCaptureHealer] over name's agent-pane
