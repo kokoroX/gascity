@@ -240,6 +240,13 @@ func (s ProgramStatus) BoundaryAt() time.Time {
 	return s.Since
 }
 
+// ProgramStatusFreshReader reads a fresh program status for an idle proof.
+// The reader returns false when on-mode readings are unavailable.
+type ProgramStatusFreshReader interface {
+	// ProgramStatusFreshRead reads the named session past any cached snapshot.
+	ProgramStatusFreshRead(name string) (ProgramStatus, bool)
+}
+
 // ProgramStatusShadowProvider is an optional extension: a leaf reading
 // program status under the shadow switch hands out the sink its comparisons
 // go to, so a decision point outside the leaf records against the same
@@ -251,7 +258,7 @@ type ProgramStatusShadowProvider interface {
 	ProgramStatusShadowSink() ProgramStatusComparisonSink
 	// ProgramStatusShadowRead reads session name's record fresh from the
 	// runtime, past any snapshot [ProgramStatusProvider] answers from, for
-	// a point that judges two readings taken apart ([ShadowIdleProof]). ok
+	// a point that judges two readings taken apart ([ProgramIdleProof]). ok
 	// is false unless the switch is shadow and the read succeeded.
 	ProgramStatusShadowRead(name string) (ProgramStatus, bool)
 }
@@ -305,18 +312,36 @@ func programStatusShadowFresh(p Provider, name string) (ProgramStatus, ProgramSt
 	return s, sink, true
 }
 
-// ShadowIdleProof runs prove, an idle proof of session name, and returns its
-// verdict alone. While the leaf serving the session is shadowing, the proof
-// is recorded beside the record's own sleep proof (proved_idle,
-// [ProgramQuiescentVerdict]) over two readings the leaf takes fresh from the
-// runtime, one before the proof and one after it: a leaf's cached reading
-// is one snapshot for longer than a proof takes, and one snapshot read twice
-// proves nothing. proved_idle covers the proof's leaf wait, so prove's ctx is
-// marked ([WithShadowCallerRecords]) and that wait records no wait_for_idle
-// of its own: a busy seat's idle proof fails every tick.
-func ShadowIdleProof(ctx context.Context, p Provider, name string, prove func(context.Context) bool) bool {
+// ProgramIdleProof runs prove and returns its verdict unless two fresh on-mode
+// readings, taken before and after prove, give a conclusive quiescence verdict.
+// It takes the second reading only when the first succeeds in on mode. In
+// shadow mode it takes fresh readings around prove when available and records
+// their comparison without changing prove's verdict. Off mode makes no fresh
+// reads. The proof's context marks its leaf wait as recorded by its caller.
+func ProgramIdleProof(ctx context.Context, p Provider, name string, prove func(context.Context) bool) bool {
 	before, sink, shadowed := programStatusShadowFresh(p, name)
+	var reader ProgramStatusFreshReader
+	var on bool
+	if !shadowed && p != nil && name != "" {
+		leaf, _, _ := ResolveBackend(p, name)
+		reader, _ = leaf.(ProgramStatusFreshReader)
+		if reader != nil {
+			before, on = reader.ProgramStatusFreshRead(name)
+			on = on && before.Mode == ProgramStatusOn
+		}
+	}
 	proved := prove(WithShadowCallerRecords(ctx))
+	if on {
+		after, ok := reader.ProgramStatusFreshRead(name)
+		if ok && after.Mode == ProgramStatusOn {
+			switch ProgramQuiescentVerdict(before, after) {
+			case ProgramVerdictIdle:
+				return true
+			case ProgramVerdictBusy:
+				return false
+			}
+		}
+	}
 	if !shadowed {
 		return proved
 	}
