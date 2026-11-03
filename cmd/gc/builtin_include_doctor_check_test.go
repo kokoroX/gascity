@@ -1330,12 +1330,14 @@ func TestBuiltinImportDoctorCheck_OKAfterInit(t *testing.T) {
 	}
 }
 
-// TestStatusWarnsOnMissingBuiltinImports pins the user-visible migration
-// warning end to end: a city.toml without the builtin imports must surface
-// the once-per-city warning on a real command's stderr, even though earlier
-// silent config pre-loads (io.Discard writers) run first in the same process
-// and must not consume the warning slot.
-func TestStatusWarnsOnMissingBuiltinImports(t *testing.T) {
+// TestConfigLoadMissingBuiltinImportHintSkipsNonReportingCommands pins both
+// halves of the delivery policy: an ordinary command reads the config without a
+// reporting writer, so its stderr — which may be an agent's pty — does not get
+// the missing-import hint, and that dropped delivery must not consume the
+// once-per-city slot, so the next reporting load of the same city still gets
+// it. gc doctor's builtin import check reports the missing packs regardless
+// (TestBuiltinImportDoctorCheck_AddsMissingImports).
+func TestConfigLoadMissingBuiltinImportHintSkipsNonReportingCommands(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_DOLT", "skip")
 	dir := t.TempDir()
@@ -1353,8 +1355,21 @@ func TestStatusWarnsOnMissingBuiltinImports(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("gc status = %d; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "does not import required builtin pack(s) core") {
-		t.Fatalf("stderr missing builtin-import warning: %q", stderr.String())
+	if strings.Contains(stderr.String(), "does not import required builtin pack") {
+		t.Fatalf("gc status printed the builtin-import hint: %q", stderr.String())
+	}
+
+	// The command's load ran first and was dropped, so the reporting load below
+	// is only reached because the dropped one left the once-per-city slot free.
+	tomlPath := filepath.Join(dir, "city.toml")
+	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, tomlPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	var reported bytes.Buffer
+	warnMissingRequiredBuiltinImports(fsys.OSFS{}, cfg, tomlPath, advisoryReportingWriter{&reported})
+	if !strings.Contains(reported.String(), "does not import required builtin pack(s) core") {
+		t.Fatalf("reporting load missing builtin-import warning: %q", reported.String())
 	}
 }
 

@@ -34,7 +34,7 @@ TestCmdHandoffAutoHookFormatCodex	fails under the gate: open beads = 0, want han
 TestCmdHandoffAutoSendsMailWithoutBlocking	fails under the gate: got 0 open beads, want 1
 TestCmdHandoffAutoUsesDefaultSubject	fails under the gate: got 0 open beads, want 1
 TestCmdHandoffRemoteDefaultSenderFallsBackToGCAliasWhenSessionIDMissing	fails under the gate: message bead not found; beads=[]beads.Bead{}
-TestCmdMailReply_FallsBackToGCSessionIDWhenAliasMissing	fails under the gate: cmdMailReply() = 1, want 0; stdout= stderr=warning: this city does not import required builtin pack(s) core; run "gc doctor --fix" to add the missing import(s)
+TestCmdMailReply_FallsBackToGCSessionIDWhenAliasMissing	fails under the gate: cmdMailReply() = 1, want 0
 TestCmdMailSendAllFlagBodyWinsOverPositional	fails under the gate: message bead not found; total beads = 0
 TestCmdMailSendAllPositionalBodyHonouredWhenSubjectFlagSet	fails under the gate: message bead not found; total beads = 0
 TestCmdMailSendDefaultSenderFallsBackToGCAliasWhenSessionIDMissing	fails under the gate: message bead not found; beads=[]beads.Bead{}
@@ -214,7 +214,7 @@ TestOrderDispatchTrackingStaysOnTheOneStoreOnSingleStoreCity	fails under the gat
 TestOrderDispatchWispStaysOnTheOneStoreOnSingleStoreCity	fails under the gate: graphStoreFor returned *splittest.view(0x1ed316d78840), want the identical store value 0x1ed31656d260
 TestOrderGatePoursWorkIsLazyAndFailsSafe	fails under the gate: poursWork was asked on a single-store city
 TestOrderSweepTrackingConfirmAboveThresholdSweepsAndPrunes	fails under the gate: sc-02 should be preserved at the retain floor: bead "sc-02" is not in this store: bead not found
-TestOrderSweepTrackingRequiresConfirm	fails under the gate: cmdOrderSweepTrackingWithOptions (no confirm) = 0, want 1; stderr: warning: this city does not import required builtin pack(s) core; run "gc doctor --fix" to ad
+TestOrderSweepTrackingRequiresConfirm	fails under the gate: cmdOrderSweepTrackingWithOptions (no confirm) = 0, want 1
 TestOrderTrackingRetentionWatchdog_LogsPrunedCount	fails under the gate: stderr = "", want 'pruned' in output
 TestOrderTrackingRetentionWatchdog_PrunesEligibleBeads	fails under the gate: Get(prune-00) err = <nil>, want ErrNotFound (should be pruned)
 TestOrderTrackingRetentionWatchdog_PrunesWhenBackupFresh	fails under the gate: Get(guard-00) err = <nil>, want ErrNotFound (should be pruned)

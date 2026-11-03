@@ -9,7 +9,6 @@ Rigs in <CITY>:
     Beads:  not initialized
 === stderr ===
 cmd=rig list route=fallback reason=controller-down
-warning: this city does not import required builtin pack(s) core; run "gc doctor --fix" to add the missing import(s)
 === json_exit ===
 0
 === json ===

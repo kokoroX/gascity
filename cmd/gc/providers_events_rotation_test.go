@@ -267,10 +267,10 @@ archive_retain_age = "24h"
 
 	// Set in city.toml, this arrives as a config-composition warning, so it is
 	// subject to the delivery policy in config_advisory_policy.go. This case is
-	// about the warning being produced for the setting at all.
-	assumeInteractiveConfigAdvisories(t)
+	// about the warning being produced for the setting at all, so it writes
+	// through a reporting writer.
 	var stderr strings.Builder
-	ep, code := openCityEventsProvider(&stderr, "test")
+	ep, code := openCityEventsProvider(advisoryReportingWriter{&stderr}, "test")
 	if code != 0 || ep == nil {
 		t.Fatalf("openCityEventsProvider() code = %d, provider nil = %t, stderr = %q", code, ep == nil, stderr.String())
 	}

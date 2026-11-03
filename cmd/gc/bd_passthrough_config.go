@@ -39,8 +39,8 @@ var bdPassthroughReadinessFallbacks atomic.Int64
 // full load) does not run the pass either.
 //
 // It also skips warnMissingRequiredBuiltinImports: that is a config-health
-// hint gc status, gc start and gc doctor print, not something a data-plane
-// passthrough agents call thousands of times a day should repeat.
+// hint gc doctor reports, not something a data-plane passthrough agents call
+// thousands of times a day should repeat.
 func loadCityConfigForBdPassthrough(cityPath string, warnings io.Writer) (*config.City, error) {
 	tomlPath := filepath.Join(cityPath, "city.toml")
 	cfg, prov, err := loadComposedCityConfig(fsys.OSFS{}, tomlPath, skipRevisionSnapshot)

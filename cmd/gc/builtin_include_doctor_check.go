@@ -55,11 +55,15 @@ var builtinImportWarningCache sync.Map
 // loads — it just runs without the builtin content it almost certainly
 // wants — so this is a warning with a doctor-driven repair, not an error.
 //
-// Silent loaders (io.Discard) must not consume the once-per-city slot:
-// commands often pre-load config quietly before the user-visible load, and
-// the warning has to reach the visible one.
+// Delivery follows the config-advisory policy: only a reporting command's
+// writer (advisoryReportingWriter) receives it; `gc doctor`'s builtin import
+// check reports the same missing packs regardless. Writers the policy drops
+// must not consume the once-per-city slot either: commands often pre-load
+// config quietly before the user-visible load, and the warning has to reach
+// the one load that can print it.
 func warnMissingRequiredBuiltinImports(fs fsys.FS, cfg *config.City, tomlPath string, w io.Writer) {
-	if w == nil || w == io.Discard || !usesOSFS(fs) {
+	target := configAdvisoryTarget(w)
+	if configAdvisoriesSuppressed(target) || !usesOSFS(fs) {
 		return
 	}
 	cityPath := filepath.Dir(tomlPath)
@@ -71,7 +75,7 @@ func warnMissingRequiredBuiltinImports(fs fsys.FS, cfg *config.City, tomlPath st
 	if _, alreadyWarned := builtinImportWarningCache.LoadOrStore(key, struct{}{}); alreadyWarned {
 		return
 	}
-	fmt.Fprintf(w, "warning: this city does not import required builtin pack(s) %s; run \"gc doctor --fix\" to add the missing import(s)\n", strings.Join(missing, ", ")) //nolint:errcheck // best-effort warning emission
+	fmt.Fprintf(target, "warning: this city does not import required builtin pack(s) %s; run \"gc doctor --fix\" to add the missing import(s)\n", strings.Join(missing, ", ")) //nolint:errcheck // best-effort warning emission
 }
 
 func legacySystemPacksInclude(cityPath, include string) bool {

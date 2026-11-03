@@ -31,29 +31,25 @@ func TestConfigAdvisoryTargetPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("non-terminal writer is dropped", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return false })
+	// An agent harness runs commands on a pty, so a terminal writer must be
+	// dropped like any other. os.Stderr here is a terminal whenever the suite
+	// runs from one; either way it must be dropped.
+	t.Run("unwrapped writer is dropped even when it is a terminal", func(t *testing.T) {
+		if got := configAdvisoryTarget(os.Stderr); got != io.Discard {
+			t.Fatalf("configAdvisoryTarget(os.Stderr) = %#v, want io.Discard", got)
+		}
 		if got := configAdvisoryTarget(&buf); got != io.Discard {
-			t.Fatalf("configAdvisoryTarget(non-terminal) = %#v, want io.Discard", got)
+			t.Fatalf("configAdvisoryTarget(buffer) = %#v, want io.Discard", got)
 		}
 	})
 
-	t.Run("terminal writer is kept", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return true })
-		if got := configAdvisoryTarget(&buf); got != io.Writer(&buf) {
-			t.Fatalf("configAdvisoryTarget(terminal) = %#v, want the writer itself", got)
-		}
-	})
-
-	t.Run("reporting writer is kept without a terminal", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return false })
+	t.Run("reporting writer is kept", func(t *testing.T) {
 		if got := configAdvisoryTarget(advisoryReportingWriter{&buf}); got != io.Writer(&buf) {
 			t.Fatalf("configAdvisoryTarget(reporting) = %#v, want the wrapped writer", got)
 		}
 	})
 
 	t.Run("reporting writer unwraps discard", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return true })
 		if got := configAdvisoryTarget(advisoryReportingWriter{io.Discard}); got != io.Discard {
 			t.Fatalf("configAdvisoryTarget(reporting discard) = %#v, want io.Discard", got)
 		}
@@ -61,31 +57,21 @@ func TestConfigAdvisoryTargetPolicy(t *testing.T) {
 }
 
 // TestEmitLoadCityConfigWarningsHonorsAdvisoryPolicy is the regression guard
-// for the reason the policy exists: a command that loads the city config in a
-// non-interactive session must not spend the caller's context on advisories.
+// for the reason the policy exists: a command that loads the city config must
+// not spend the caller's context on advisories, and a terminal does not exempt
+// it.
 func TestEmitLoadCityConfigWarningsHonorsAdvisoryPolicy(t *testing.T) {
 	prov := &config.Provenance{Warnings: []string{advisoryWarning}}
 
-	t.Run("non-interactive stderr gets nothing", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return false })
+	t.Run("unwrapped stderr gets nothing", func(t *testing.T) {
 		var stderr bytes.Buffer
 		emitLoadCityConfigWarnings(&stderr, prov)
 		if stderr.Len() != 0 {
-			t.Fatalf("advisory reached a non-interactive writer: %q", stderr.String())
-		}
-	})
-
-	t.Run("interactive stderr still gets it", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return true })
-		var stderr bytes.Buffer
-		emitLoadCityConfigWarnings(&stderr, prov)
-		if !strings.Contains(stderr.String(), advisoryWarning) {
-			t.Fatalf("advisory missing from interactive stderr: %q", stderr.String())
+			t.Fatalf("advisory reached a non-reporting writer: %q", stderr.String())
 		}
 	})
 
 	t.Run("reporting command still gets it", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return false })
 		var stderr bytes.Buffer
 		emitLoadCityConfigWarnings(advisoryReportingWriter{&stderr}, prov)
 		if !strings.Contains(stderr.String(), advisoryWarning) {
@@ -93,17 +79,16 @@ func TestEmitLoadCityConfigWarningsHonorsAdvisoryPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("discard is still discarded", func(t *testing.T) {
-		withConfigAdvisoryTerminal(t, func(io.Writer) bool { return true })
+	t.Run("discard is still discarded", func(_ *testing.T) {
 		emitLoadCityConfigWarnings(io.Discard, prov)
 	})
 }
 
 // TestConfigAdvisoryPolicyBypassesStayReviewed pins the set of commands that
 // opt out of the policy. Wrapping a writer in advisoryReportingWriter makes a
-// command print config advisories into every non-interactive caller's context,
-// including an agent's, so a new bypass is a decision to review here rather
-// than a detail of one command.
+// command print config advisories into every caller's context, including an
+// agent's, so a new bypass is a decision to review here rather than a detail of
+// one command.
 func TestConfigAdvisoryPolicyBypassesStayReviewed(t *testing.T) {
 	allowed := map[string]string{
 		"cmd_doctor.go": "reporting configuration problems is gc doctor's purpose",
@@ -138,22 +123,4 @@ func TestConfigAdvisoryPolicyBypassesStayReviewed(t *testing.T) {
 			t.Fatalf("%s no longer bypasses the config-advisory policy (%s); drop it from this test", name, reason)
 		}
 	}
-}
-
-// assumeInteractiveConfigAdvisories makes config-load advisories behave as if
-// the case were running on a terminal. Tests that assert a loader or a command
-// still produces an advisory use it so they keep testing that, not the
-// delivery policy, which has its own cases above.
-func assumeInteractiveConfigAdvisories(t *testing.T) {
-	t.Helper()
-	withConfigAdvisoryTerminal(t, func(io.Writer) bool { return true })
-}
-
-// withConfigAdvisoryTerminal swaps the terminal probe for one case and
-// restores it afterwards.
-func withConfigAdvisoryTerminal(t *testing.T, probe func(io.Writer) bool) {
-	t.Helper()
-	previous := configAdvisoryIsTerminal
-	configAdvisoryIsTerminal = probe
-	t.Cleanup(func() { configAdvisoryIsTerminal = previous })
 }

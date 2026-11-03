@@ -400,8 +400,9 @@ func TestGcBdPassthroughTrimsKeepMigratedCopyRouting(t *testing.T) {
 				legacy = tc.run(t)
 			})
 			t.Run("trimmed", func(t *testing.T) { trimmed = tc.run(t) })
-			// The one intended difference: the legacy full load also printed
-			// the missing-builtin-import hint for these import-less fixtures.
+			// Ordinary commands do not deliver the hint
+			// (config_advisory_policy.go); the filter keeps the parity
+			// comparison independent of that policy.
 			legacy.stderr = dropMissingBuiltinImportHint(legacy.stderr)
 			if legacy != trimmed {
 				t.Fatalf("migrated-copy routing changed:\nlegacy=%+v\ntrimmed=%+v", legacy, trimmed)
