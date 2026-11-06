@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/beadstest"
 	beadsexec "github.com/gastownhall/gascity/internal/beads/exec"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
@@ -2844,7 +2845,7 @@ func TestSlingAttachGraphFormulaCreatesConvoyFirstRoot(t *testing.T) {
 	if got := sourceAfter.Metadata["workflow_id"]; got != "" {
 		t.Fatalf("source workflow_id = %q, want empty", got)
 	}
-	members, err := convoycore.Members(deps.Store, inputConvoyID, true)
+	members, err := convoycore.MembersIn(convoycore.MemberClasses{Convoy: beadstest.Work(deps.Store)}, inputConvoyID, true)
 	if err != nil {
 		t.Fatalf("Members: %v", err)
 	}
@@ -3459,11 +3460,11 @@ func TestRollbackGraphV2ReplacementLaunchRestoresReplacedRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshots, err := sourceworkflow.SnapshotOpenWorkflowBeads(store, replaced.ID)
+	snapshots, err := sourceworkflow.SnapshotOpenWorkflowBeads(beadstest.GraphMolecule(store), replaced.ID)
 	if err != nil {
 		t.Fatalf("SnapshotOpenWorkflowBeads: %v", err)
 	}
-	if _, err := sourceworkflow.CloseWorkflowSubtree(store, replaced.ID); err != nil {
+	if _, err := sourceworkflow.CloseWorkflowSubtree(beadstest.GraphMolecule(store), replaced.ID); err != nil {
 		t.Fatalf("CloseWorkflowSubtree(replaced): %v", err)
 	}
 	replacement, err := store.Create(beads.Bead{
@@ -3551,7 +3552,7 @@ func TestDoSlingBatchGraphFormulaTreatsConvoyAsSingleInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := convoycore.TrackItem(deps.Store, convoy.ID, child.ID); err != nil {
+	if err := convoycore.TrackItemIn(convoycore.MemberClasses{Convoy: beadstest.Work(deps.Store)}, convoy.ID, child.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3765,7 +3766,7 @@ func TestSlingAttachGraphFormulaConvoyFirstNoExistingRootProceeds(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := convoycore.TrackItem(deps.Store, unrelated.ID, source.ID); err != nil {
+	if err := convoycore.TrackItemIn(convoycore.MemberClasses{Convoy: beadstest.Work(deps.Store)}, unrelated.ID, source.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3930,7 +3931,7 @@ func TestSlingAttachGraphFormulaMultiItemConvoyRootDoesNotBlockMemberLaunch(t *t
 		t.Fatal(err)
 	}
 	for _, item := range []string{member.ID, sibling.ID} {
-		if err := convoycore.TrackItem(deps.Store, convoy.ID, item); err != nil {
+		if err := convoycore.TrackItemIn(convoycore.MemberClasses{Convoy: beadstest.Work(deps.Store)}, convoy.ID, item); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -3990,7 +3991,7 @@ func TestLiveConvoyTrackedWorkflowRootsSkipsTerminalRoots(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := convoycore.TrackItem(deps.Store, convoy.ID, source.ID); err != nil {
+			if err := convoycore.TrackItemIn(convoycore.MemberClasses{Convoy: beadstest.Work(deps.Store)}, convoy.ID, source.ID); err != nil {
 				t.Fatal(err)
 			}
 			trackedGraphV2Root(t, deps.Store, convoy.ID, "graph-work", tc.status)
@@ -5579,8 +5580,7 @@ func TestSlingFormulaTargetBranch_PrefersBeadMetadata(t *testing.T) {
 		t.Fatalf("seeding bead: %v", err)
 	}
 	deps := SlingDeps{
-		Cfg:      cfg,
-		Store:    store,
+		Cfg: cfg, Store: store, WorkHandle: beadstest.Work(store),
 		Branches: fixedBranchResolver{branch: "main"},
 	}
 	a := config.Agent{Name: "polecat", Dir: "scamper"}
@@ -5600,7 +5600,7 @@ func seedTrackingConvoy(t *testing.T, store beads.Store, target string, items ..
 		t.Fatalf("seeding convoy: %v", err)
 	}
 	for _, id := range items {
-		if err := convoycore.TrackItem(store, cv.ID, id); err != nil {
+		if err := store.DepAdd(cv.ID, id, convoycore.TrackingDepType); err != nil {
 			t.Fatalf("tracking %s: %v", id, err)
 		}
 	}
@@ -5617,7 +5617,7 @@ func TestSlingFormulaTargetBranch_InheritsTrackingConvoyTarget(t *testing.T) {
 		t.Fatalf("seeding bead: %v", err)
 	}
 	seedTrackingConvoy(t, store, "integration/auth-rewrite", bead.ID)
-	deps := SlingDeps{Cfg: cfg, Store: store, Branches: fixedBranchResolver{branch: "main"}}
+	deps := SlingDeps{Cfg: cfg, Store: store, WorkHandle: beadstest.Work(store), Branches: fixedBranchResolver{branch: "main"}}
 
 	got := SlingFormulaTargetBranch(bead.ID, deps, config.Agent{Name: "polecat", Dir: "scamper"})
 	if got != "integration/auth-rewrite" {
@@ -5633,7 +5633,7 @@ func TestBeadMetadataTarget_OwnTargetBeatsTrackingConvoy(t *testing.T) {
 	}
 	seedTrackingConvoy(t, store, "integration/auth-rewrite", bead.ID)
 
-	if got := BeadMetadataTarget(store, bead.ID); got != "release/v2" {
+	if got := BeadMetadataTarget(beadstest.Work(store), bead.ID); got != "release/v2" {
 		t.Errorf("BeadMetadataTarget = %q, want %q (own target wins)", got, "release/v2")
 	}
 }
@@ -5650,7 +5650,7 @@ func TestBeadMetadataTarget_InheritsConvoyTrackingAnAncestor(t *testing.T) {
 	}
 	seedTrackingConvoy(t, store, "integration/epic", parent.ID)
 
-	if got := BeadMetadataTarget(store, child.ID); got != "integration/epic" {
+	if got := BeadMetadataTarget(beadstest.Work(store), child.ID); got != "integration/epic" {
 		t.Errorf("BeadMetadataTarget = %q, want %q (convoy tracking the parent)", got, "integration/epic")
 	}
 }
@@ -5664,7 +5664,7 @@ func TestBeadMetadataTarget_IgnoresTrackingConvoyWithoutTarget(t *testing.T) {
 	seedTrackingConvoy(t, store, "", bead.ID)
 	seedTrackingConvoy(t, store, "integration/auth-rewrite", bead.ID)
 
-	if got := BeadMetadataTarget(store, bead.ID); got != "integration/auth-rewrite" {
+	if got := BeadMetadataTarget(beadstest.Work(store), bead.ID); got != "integration/auth-rewrite" {
 		t.Errorf("BeadMetadataTarget = %q, want %q (untargeted convoy does not mask a targeted one)", got, "integration/auth-rewrite")
 	}
 }
@@ -5678,7 +5678,7 @@ func TestBeadMetadataTarget_ConflictingTrackingConvoysInheritNothing(t *testing.
 	seedTrackingConvoy(t, store, "integration/a", bead.ID)
 	seedTrackingConvoy(t, store, "integration/b", bead.ID)
 
-	if got := BeadMetadataTarget(store, bead.ID); got != "" {
+	if got := BeadMetadataTarget(beadstest.Work(store), bead.ID); got != "" {
 		t.Errorf("BeadMetadataTarget = %q, want empty (two convoys disagree; the bead must name its own target)", got)
 	}
 }
@@ -5835,8 +5835,7 @@ func TestBuildSlingFormulaVarsBaseBranchPrefersBeadTarget(t *testing.T) {
 		t.Fatalf("seeding bead: %v", err)
 	}
 	deps := SlingDeps{
-		Cfg:      cfg,
-		Store:    store,
+		Cfg: cfg, Store: store, WorkHandle: beadstest.Work(store),
 		Branches: fixedBranchResolver{branch: "main"},
 	}
 	a := config.Agent{Name: "polecat", Dir: "scamper"}

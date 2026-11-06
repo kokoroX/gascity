@@ -931,6 +931,7 @@ const (
 	QueuedDelivery    SessionProgramStatusShadowPayloadPoint = "queued_delivery"
 	Readiness         SessionProgramStatusShadowPayloadPoint = "readiness"
 	StartupLadder     SessionProgramStatusShadowPayloadPoint = "startup_ladder"
+	StarvedBypass     SessionProgramStatusShadowPayloadPoint = "starved_bypass"
 	SubmitConfirm     SessionProgramStatusShadowPayloadPoint = "submit_confirm"
 	TypingGate        SessionProgramStatusShadowPayloadPoint = "typing_gate"
 	WaitForIdle       SessionProgramStatusShadowPayloadPoint = "wait_for_idle"
@@ -962,6 +963,8 @@ func (e SessionProgramStatusShadowPayloadPoint) Valid() bool {
 	case Readiness:
 		return true
 	case StartupLadder:
+		return true
+	case StarvedBypass:
 		return true
 	case SubmitConfirm:
 		return true
@@ -2756,6 +2759,16 @@ type ContextAdvisoryTier struct {
 	Enabled   *bool   `json:"Enabled"`
 	Message   *string `json:"Message"`
 	Threshold *int64  `json:"Threshold"`
+}
+
+// ControlCheckUnlaunchablePayload defines model for ControlCheckUnlaunchablePayload.
+type ControlCheckUnlaunchablePayload struct {
+	BeadId     string  `json:"bead_id"`
+	CheckPath  string  `json:"check_path"`
+	Error      string  `json:"error"`
+	Kind       *string `json:"kind,omitempty"`
+	RootBeadId *string `json:"root_bead_id,omitempty"`
+	StorePath  *string `json:"store_path,omitempty"`
 }
 
 // ControlDispatcherScopeGapPayload defines model for ControlDispatcherScopeGapPayload.
@@ -5774,28 +5787,31 @@ type SessionResponse struct {
 	Activity   *string `json:"activity,omitempty"`
 
 	// ActivitySource Where activity came from: program (the session program's own report, under the city's program_status switch on) or transcript. Set only while program_status is present. The session stream's activity frames stay transcript-derived; its program_status frame carries the program's report.
-	ActivitySource         *SessionResponseActivitySource `json:"activity_source,omitempty"`
-	AgentKind              *string                        `json:"agent_kind,omitempty"`
-	Alias                  *string                        `json:"alias,omitempty"`
-	Attached               bool                           `json:"attached"`
-	ConfiguredNamedSession *bool                          `json:"configured_named_session,omitempty"`
-	ContextPct             *int64                         `json:"context_pct,omitempty"`
-	ContextWindow          *int64                         `json:"context_window,omitempty"`
-	CreatedAt              string                         `json:"created_at"`
-	DisplayName            *string                        `json:"display_name,omitempty"`
-	Id                     string                         `json:"id"`
-	Kind                   *string                        `json:"kind,omitempty"`
-	LastActive             *string                        `json:"last_active,omitempty"`
-	LastNudgeDeliveredAt   *string                        `json:"last_nudge_delivered_at,omitempty"`
-	LastOutput             *string                        `json:"last_output,omitempty"`
-	Metadata               *map[string]string             `json:"metadata,omitempty"`
-	Model                  *string                        `json:"model,omitempty"`
-	Options                *map[string]string             `json:"options,omitempty"`
-	Pool                   *string                        `json:"pool,omitempty"`
-	ProgramStatus          *SessionProgramStatus          `json:"program_status,omitempty"`
-	Provider               string                         `json:"provider"`
-	Reason                 *string                        `json:"reason,omitempty"`
-	Rig                    *string                        `json:"rig,omitempty"`
+	ActivitySource *SessionResponseActivitySource `json:"activity_source,omitempty"`
+	AgentKind      *string                        `json:"agent_kind,omitempty"`
+
+	// AgentName The concrete agent identity the session runs as: the agent's qualified name or a pool slot such as rig/worker-1. Sent on every session by Gas City 1.6 and later servers, empty when the session records none; older servers omit it.
+	AgentName              *string               `json:"agent_name,omitempty"`
+	Alias                  *string               `json:"alias,omitempty"`
+	Attached               bool                  `json:"attached"`
+	ConfiguredNamedSession *bool                 `json:"configured_named_session,omitempty"`
+	ContextPct             *int64                `json:"context_pct,omitempty"`
+	ContextWindow          *int64                `json:"context_window,omitempty"`
+	CreatedAt              string                `json:"created_at"`
+	DisplayName            *string               `json:"display_name,omitempty"`
+	Id                     string                `json:"id"`
+	Kind                   *string               `json:"kind,omitempty"`
+	LastActive             *string               `json:"last_active,omitempty"`
+	LastNudgeDeliveredAt   *string               `json:"last_nudge_delivered_at,omitempty"`
+	LastOutput             *string               `json:"last_output,omitempty"`
+	Metadata               *map[string]string    `json:"metadata,omitempty"`
+	Model                  *string               `json:"model,omitempty"`
+	Options                *map[string]string    `json:"options,omitempty"`
+	Pool                   *string               `json:"pool,omitempty"`
+	ProgramStatus          *SessionProgramStatus `json:"program_status,omitempty"`
+	Provider               string                `json:"provider"`
+	Reason                 *string               `json:"reason,omitempty"`
+	Rig                    *string               `json:"rig,omitempty"`
 
 	// Running Whether the session's runtime was live when this response was built, in any open state. It observes the runtime, not the agent: on tmux it is true while the session has a pane whose process has not exited, so a pane still running a launch wrapper or shell before the agent starts reads true, and a pane kept by remain-on-exit after its process exited reads false. GET /session/{id} and GET /sessions read the same probe, which tmux serves from a fleet snapshot refreshed at most every 2 s. Point-in-time: a session in a transitional state (creating, start-pending, draining) can start or stop its process right after; a client confirming quiescence should re-read after its last transition settles.
 	Running                bool                    `json:"running"`
@@ -5804,8 +5820,17 @@ type SessionResponse struct {
 	SubmissionCapabilities *SubmissionCapabilities `json:"submission_capabilities,omitempty"`
 	Template               string                  `json:"template"`
 	Title                  string                  `json:"title"`
-	Turn                   *SessionTurn            `json:"turn,omitempty"`
-	WorkDir                *string                 `json:"work_dir,omitempty"`
+
+	// Transport How gc drives the session runtime, for example tmux or acp. Empty when unknown.
+	Transport *string      `json:"transport,omitempty"`
+	Turn      *SessionTurn `json:"turn,omitempty"`
+
+	// WakeReasons Why the controller keeps this open session awake (for example session, config, create, attached, keep-warm, wait, pending, pin), as gc session list's REASON column shows them when no lifecycle reason applies. Sent only on GET /sessions?wake_reasons=true, by servers that compute them.
+	WakeReasons *[]string `json:"wake_reasons,omitempty"`
+	WorkDir     *string   `json:"work_dir,omitempty"`
+
+	// WorkerDir The agent process's canonical working directory (a per-bead worktree when it has one), which work_dir may not be.
+	WorkerDir *string `json:"worker_dir,omitempty"`
 }
 
 // SessionResponseActivitySource Where activity came from: program (the session program's own report, under the city's program_status switch on) or transcript. Set only while program_status is present. The session stream's activity frames stay transcript-derived; its program_status frame carries the program's report.
@@ -7980,6 +8005,22 @@ type TypedEventStreamEnvelopeCityUnregisterRequested struct {
 	Workflow         *WorkflowEventProjection `json:"workflow,omitempty"`
 }
 
+// TypedEventStreamEnvelopeControlCheckUnlaunchable defines model for TypedEventStreamEnvelopeControlCheckUnlaunchable.
+type TypedEventStreamEnvelopeControlCheckUnlaunchable struct {
+	Actor            string                          `json:"actor"`
+	DependsOnStepIds *[]string                       `json:"depends_on_step_ids,omitempty"`
+	Message          *string                         `json:"message,omitempty"`
+	Payload          ControlCheckUnlaunchablePayload `json:"payload"`
+	RunId            *string                         `json:"run_id,omitempty"`
+	Seq              int64                           `json:"seq"`
+	SessionId        *string                         `json:"session_id,omitempty"`
+	StepId           *string                         `json:"step_id,omitempty"`
+	Subject          *string                         `json:"subject,omitempty"`
+	Ts               time.Time                       `json:"ts"`
+	Type             string                          `json:"type"`
+	Workflow         *WorkflowEventProjection        `json:"workflow,omitempty"`
+}
+
 // TypedEventStreamEnvelopeControlDispatcherScopeGap defines model for TypedEventStreamEnvelopeControlDispatcherScopeGap.
 type TypedEventStreamEnvelopeControlDispatcherScopeGap struct {
 	Actor            string                           `json:"actor"`
@@ -10035,6 +10076,23 @@ type TypedTaggedEventStreamEnvelopeCityUnregisterRequested struct {
 	Ts               time.Time                `json:"ts"`
 	Type             string                   `json:"type"`
 	Workflow         *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable defines model for TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable.
+type TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable struct {
+	Actor            string                          `json:"actor"`
+	City             string                          `json:"city"`
+	DependsOnStepIds *[]string                       `json:"depends_on_step_ids,omitempty"`
+	Message          *string                         `json:"message,omitempty"`
+	Payload          ControlCheckUnlaunchablePayload `json:"payload"`
+	RunId            *string                         `json:"run_id,omitempty"`
+	Seq              int64                           `json:"seq"`
+	SessionId        *string                         `json:"session_id,omitempty"`
+	StepId           *string                         `json:"step_id,omitempty"`
+	Subject          *string                         `json:"subject,omitempty"`
+	Ts               time.Time                       `json:"ts"`
+	Type             string                          `json:"type"`
+	Workflow         *WorkflowEventProjection        `json:"workflow,omitempty"`
 }
 
 // TypedTaggedEventStreamEnvelopeControlDispatcherScopeGap defines model for TypedTaggedEventStreamEnvelopeControlDispatcherScopeGap.
@@ -13318,6 +13376,9 @@ type GetV0CityByCityNameSessionsParams struct {
 
 	// Peek Include last output preview.
 	Peek *bool `form:"peek,omitempty" json:"peek,omitempty"`
+
+	// WakeReasons Include wake_reasons on each open session: why the controller keeps it awake, as gc session list's REASON column shows them. Costs runtime probes per session.
+	WakeReasons *bool `form:"wake_reasons,omitempty" json:"wake_reasons,omitempty"`
 }
 
 // CreateSessionParams defines parameters for CreateSession.
@@ -13345,6 +13406,9 @@ type GetV0CityByCityNameStatusParams struct {
 
 	// Lite When true, omit the expensive store-health, session-count, and work-count blocks for low-cost dashboard polls.
 	Lite *bool `form:"lite,omitempty" json:"lite,omitempty"`
+
+	// Fresh When true, skip the time-bucket and TTL-floor reuse and wait for a build of the body that starts no earlier than the read: one the read starts, or, while another build of this view runs, the one queued behind it, which every read that queued shares. If that build is not done within 10 s, it finishes in the background and the read is answered with the saved body, as a stale-while-revalidate serve is (X-GC-Cache-Refresh rebuilding when the saved body is older than the bead cache); with no saved body the read waits for the build. Every build saves its body for later reads. Default false keeps stale-while-revalidate for pollers.
+	Fresh *bool `form:"fresh,omitempty" json:"fresh,omitempty"`
 }
 
 // PostV0CityByCityNameUnregisterParams defines parameters for PostV0CityByCityNameUnregister.
@@ -14117,6 +14181,32 @@ func (t *EventPayload) FromConditionalWritesDegradedPayload(v ConditionalWritesD
 
 // MergeConditionalWritesDegradedPayload performs a merge with any union data inside the EventPayload, using the provided ConditionalWritesDegradedPayload
 func (t *EventPayload) MergeConditionalWritesDegradedPayload(v ConditionalWritesDegradedPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsControlCheckUnlaunchablePayload returns the union data inside the EventPayload as a ControlCheckUnlaunchablePayload
+func (t EventPayload) AsControlCheckUnlaunchablePayload() (ControlCheckUnlaunchablePayload, error) {
+	var body ControlCheckUnlaunchablePayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromControlCheckUnlaunchablePayload overwrites any union data inside the EventPayload as the provided ControlCheckUnlaunchablePayload
+func (t *EventPayload) FromControlCheckUnlaunchablePayload(v ControlCheckUnlaunchablePayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeControlCheckUnlaunchablePayload performs a merge with any union data inside the EventPayload, using the provided ControlCheckUnlaunchablePayload
+func (t *EventPayload) MergeControlCheckUnlaunchablePayload(v ControlCheckUnlaunchablePayload) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -17870,6 +17960,34 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeCityUnregisterRe
 	return err
 }
 
+// AsTypedEventStreamEnvelopeControlCheckUnlaunchable returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeControlCheckUnlaunchable
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeControlCheckUnlaunchable() (TypedEventStreamEnvelopeControlCheckUnlaunchable, error) {
+	var body TypedEventStreamEnvelopeControlCheckUnlaunchable
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeControlCheckUnlaunchable overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeControlCheckUnlaunchable
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeControlCheckUnlaunchable(v TypedEventStreamEnvelopeControlCheckUnlaunchable) error {
+	v.Type = "control.check_unlaunchable"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeControlCheckUnlaunchable performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeControlCheckUnlaunchable
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeControlCheckUnlaunchable(v TypedEventStreamEnvelopeControlCheckUnlaunchable) error {
+	v.Type = "control.check_unlaunchable"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeControlDispatcherScopeGap returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeControlDispatcherScopeGap
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeControlDispatcherScopeGap() (TypedEventStreamEnvelopeControlDispatcherScopeGap, error) {
 	var body TypedEventStreamEnvelopeControlDispatcherScopeGap
@@ -20922,6 +21040,8 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeCitySuspended()
 	case "city.unregister_requested":
 		return t.AsTypedEventStreamEnvelopeCityUnregisterRequested()
+	case "control.check_unlaunchable":
+		return t.AsTypedEventStreamEnvelopeControlCheckUnlaunchable()
 	case "control.dispatcher_scope_gap":
 		return t.AsTypedEventStreamEnvelopeControlDispatcherScopeGap()
 	case "control.root_settle_failed":
@@ -21699,6 +21819,34 @@ func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeCityU
 // MergeTypedTaggedEventStreamEnvelopeCityUnregisterRequested performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeCityUnregisterRequested
 func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeCityUnregisterRequested(v TypedTaggedEventStreamEnvelopeCityUnregisterRequested) error {
 	v.Type = "city.unregister_requested"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable() (TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable, error) {
+	var body TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable(v TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable) error {
+	v.Type = "control.check_unlaunchable"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable(v TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable) error {
+	v.Type = "control.check_unlaunchable"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -24761,6 +24909,8 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeCitySuspended()
 	case "city.unregister_requested":
 		return t.AsTypedTaggedEventStreamEnvelopeCityUnregisterRequested()
+	case "control.check_unlaunchable":
+		return t.AsTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable()
 	case "control.dispatcher_scope_gap":
 		return t.AsTypedTaggedEventStreamEnvelopeControlDispatcherScopeGap()
 	case "control.root_settle_failed":
@@ -38542,6 +38692,22 @@ func NewGetV0CityByCityNameSessionsRequest(server string, cityName string, param
 
 		}
 
+		if params.WakeReasons != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "wake_reasons", *params.WakeReasons, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
 		queryURL.RawQuery = queryValues.Encode()
 	}
 
@@ -38748,6 +38914,22 @@ func NewGetV0CityByCityNameStatusRequest(server string, cityName string, params 
 		if params.Lite != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "lite", *params.Lite, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Fresh != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "fresh", *params.Fresh, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
