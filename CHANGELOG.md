@@ -981,6 +981,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and re-claimed by another seat is paced as usual. Pack formulas write and
   clear the key; gc only reads it.
 
+- **`gc sling --dry-run` reports the source bead's open blockers.** When the
+  target attaches a graph.v2 formula (an explicit `--on` or a configured
+  `default_sling_formula`), the preview now lists every still-open `blocks`,
+  `waits-for`, and `conditional-blocks` blocker: a graph.v2 workflow's entry
+  steps wait on it and later steps follow them, with control graphs keeping
+  every step blocked for safety. It names cross-store gates and blockers no
+  serving store resolves, distinguishing a missing local dependency from a
+  cross-store gate. Without a blocker it says so, and for a legacy (non-graph.v2)
+  attach it says the attach projects none. Reading the blockers is read-only,
+  and a failed read prints `Source blockers: unknown (…)` without changing
+  the dry-run's exit code.
+
 - **The work ladder restarts a rate-limited seat on a fresh conversation, once
   per episode, and reports every move as `work.rate_limited`.** With
   `[daemon] work_ladder` on, a seat whose provider refused its last two turns

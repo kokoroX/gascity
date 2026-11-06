@@ -2068,6 +2068,9 @@ func dryRunSingle(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, s
 				w("  Pre-check: " + opts.BeadOrFormula + preCheckClaim(opts, opts.OnFormula))
 			}
 			w("")
+			if preCheck {
+				dryRunSourceBlockerSection(w, deps, opts.BeadOrFormula, dryRunFormulaAttachIsGraphV2(opts, deps, a))
+			}
 		} else if !opts.NoFormula && a.EffectiveDefaultSlingFormula() != "" {
 			defaultFormula := a.EffectiveDefaultSlingFormula()
 			// Report-only pre-check: unlike explicit --on, an implicit
@@ -2106,6 +2109,11 @@ func dryRunSingle(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, s
 				}
 			}
 			w("")
+			// A pre-existing molecule/wisp makes the default formula skip its
+			// attach, so no workflow is created and no blocker is projected.
+			if preCheck && blockingLabel == "" {
+				dryRunSourceBlockerSection(w, deps, opts.BeadOrFormula, dryRunFormulaAttachIsGraphV2(opts, deps, a))
+			}
 		}
 
 		routeCmd, _ := sling.BuildSlingCommandForAgent("sling_query", a.EffectiveSlingQuery(), previewBeadID, deps.CityPath, deps.CityName, a, deps.Cfg.Rigs)
@@ -2139,6 +2147,124 @@ func dryRunSingle(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, s
 
 	w("No side effects executed (--dry-run).")
 	return 0
+}
+
+// dryRunSourceBlockerSection prints how the workflow this attach creates
+// inherits the source bead's still-open blockers. A graph.v2 attach projects
+// them onto entry steps, so the preview names each blocker and how the workflow
+// waits; a legacy attach writes no dependency edges, which the section states
+// outright (only when a blocker exists) so a reader does not mistake the
+// projection's absence for "sling checks no dependencies". A failed blocker
+// read prints "unknown" instead of staying silent and leaves the exit code
+// untouched: a store hiccup must not hard-fail a preview.
+func dryRunSourceBlockerSection(w func(string), deps slingDeps, beadID string, graphV2 bool) {
+	report, err := sling.SourceBlockerPreview(deps, beadID)
+	if err != nil {
+		w("Source blockers: unknown (" + err.Error() + ")")
+		w("")
+		return
+	}
+	if !graphV2 {
+		if report.Empty() {
+			return
+		}
+		w("Source blockers: not projected — a legacy (non-graph.v2) attach writes no dependency edges, so the workflow may start before " + strings.Join(allSourceBlockerIDs(report), ", ") + " closes")
+		w("")
+		return
+	}
+	if report.Empty() {
+		w("Source blockers: none — the workflow is claimable as soon as it is created")
+		w("")
+		return
+	}
+	w("Source blockers:")
+	for _, entry := range dryRunSourceBlockerEntries(report) {
+		w("  " + entry)
+	}
+	w("")
+}
+
+// dryRunSourceBlockerBatchSection prints one compact source-blocker line per
+// open child a formula attach would create. A legacy attach prints a single
+// line naming the blocked children, and only when one is actually blocked.
+func dryRunSourceBlockerBatchSection(w func(string), deps slingDeps, open []beads.Bead, graphV2 bool) {
+	var lines, blocked []string
+	for _, c := range open {
+		report, err := sling.SourceBlockerPreview(deps, c.ID)
+		if err != nil {
+			lines = append(lines, "  "+c.ID+": unknown ("+err.Error()+")")
+			continue
+		}
+		if !graphV2 {
+			if !report.Empty() {
+				blocked = append(blocked, c.ID+" waits on "+strings.Join(allSourceBlockerIDs(report), ", "))
+			}
+			continue
+		}
+		if report.Empty() {
+			lines = append(lines, "  "+c.ID+": none — claimable as soon as it is created")
+			continue
+		}
+		lines = append(lines, "  "+c.ID+": "+strings.Join(dryRunSourceBlockerEntries(report), "; "))
+	}
+	if !graphV2 {
+		if len(blocked) > 0 {
+			w("Source blockers: not projected — a legacy (non-graph.v2) attach writes no dependency edges (" + strings.Join(blocked, "; ") + ")")
+		}
+		if len(lines) > 0 {
+			w("Source blockers (per open child):")
+			for _, line := range lines {
+				w(line)
+			}
+		}
+		if len(blocked) > 0 || len(lines) > 0 {
+			w("")
+		}
+		return
+	}
+	if len(lines) == 0 {
+		return
+	}
+	w("Source blockers (per open child):")
+	for _, line := range lines {
+		w(line)
+	}
+	w("")
+}
+
+// dryRunSourceBlockerEntries renders one line per still-open source blocker,
+// naming how a graph.v2 workflow waits on it.
+func dryRunSourceBlockerEntries(report sling.SourceBlockerReport) []string {
+	entries := make([]string, 0, len(report.WorkflowBlockers)+len(report.RemoteBlockers)+len(report.Unresolved))
+	for _, id := range report.WorkflowBlockers {
+		entries = append(entries, id+" (open) — the workflow's entry steps wait until it closes; later steps follow them")
+	}
+	for _, blocker := range report.RemoteBlockers {
+		state := "open in another store"
+		if !blocker.Open {
+			state = "unread in another store"
+		}
+		entries = append(entries, blocker.ID+" ("+state+") — every workflow step waits on a cross-store gate until it closes")
+	}
+	for _, id := range report.DirectUnresolved {
+		entries = append(entries, id+" (unresolved) — no store resolves it; the entry steps wait on it until it exists and closes")
+	}
+	for _, id := range report.Unresolved {
+		entries = append(entries, id+" (unresolved) — no serving store resolves it; every workflow step holds on a gate until it resolves")
+	}
+	return entries
+}
+
+// allSourceBlockerIDs returns every blocker ID in a preview report, in the
+// order the one-line renderings describe them.
+func allSourceBlockerIDs(report sling.SourceBlockerReport) []string {
+	ids := make([]string, 0, len(report.WorkflowBlockers)+len(report.RemoteBlockers)+len(report.Unresolved))
+	ids = append(ids, report.WorkflowBlockers...)
+	for _, blocker := range report.RemoteBlockers {
+		ids = append(ids, blocker.ID)
+	}
+	ids = append(ids, report.DirectUnresolved...)
+	return append(ids, report.Unresolved...)
 }
 
 // dryRunFormulaAttachIsGraphV2 reports whether the formula this sling would
@@ -2230,6 +2356,12 @@ func dryRunBatch(opts slingOpts, deps slingDeps, stdout, _ io.Writer,
 			w("    gc formula cook " + a.EffectiveDefaultSlingFormula() + " --attach " + c.ID)
 		}
 		w("")
+	}
+
+	// Source blockers section (per open child): the same projection the single
+	// preview describes, one line per child.
+	if opts.OnFormula != "" || (!opts.NoFormula && a.EffectiveDefaultSlingFormula() != "") {
+		dryRunSourceBlockerBatchSection(w, deps, open, dryRunFormulaAttachIsGraphV2(opts, deps, a))
 	}
 
 	// Route commands.

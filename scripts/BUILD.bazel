@@ -78,6 +78,57 @@ sh_test(
     env = {"GC_NATIVE_DEP_MAX_BINARY_BYTES": "230000000"},
 )
 
+# The go_test srcs the analysis graph sees, one label per line. The
+# fork-retained guard proves each retained fork test file is still compiled by
+# a go_test, and a package's BUILD.bazel is not readable from //scripts (source
+# files are package-private unless exported), so the query is the evidence.
+# A package new to scripts/fork-retained.txt belongs in both the expression and
+# the scope below.
+genquery(
+    name = "go_test_srcs_labels",
+    expression = "labels(srcs, kind(go_test, " +
+                 "//cmd/gc:gc_test + " +
+                 "//examples/bd/dolt:dolt_test + " +
+                 "//examples/gastown:gastown_test + " +
+                 "//internal/api:api_test + " +
+                 "//internal/beads:beads_test + " +
+                 "//internal/beads/contract:contract_test + " +
+                 "//internal/bootstrap/packs/core:core_test + " +
+                 "//internal/config:config_test + " +
+                 "//internal/convergence:convergence_test + " +
+                 "//internal/doctor:doctor_test + " +
+                 "//internal/doltauth:doltauth_test + " +
+                 "//internal/formula:formula_test + " +
+                 "//internal/molecule:molecule_test + " +
+                 "//internal/processenv:processenv_test + " +
+                 "//internal/rig:rig_test + " +
+                 "//internal/runtime:runtime_test + " +
+                 "//internal/runtime/tmux:tmux_test + " +
+                 "//internal/sling:sling_test + " +
+                 "//scripts:scripts_test))",
+    scope = [
+        "//cmd/gc:gc_test",
+        "//examples/bd/dolt:dolt_test",
+        "//examples/gastown:gastown_test",
+        "//internal/api:api_test",
+        "//internal/beads:beads_test",
+        "//internal/beads/contract:contract_test",
+        "//internal/bootstrap/packs/core:core_test",
+        "//internal/config:config_test",
+        "//internal/convergence:convergence_test",
+        "//internal/doctor:doctor_test",
+        "//internal/doltauth:doltauth_test",
+        "//internal/formula:formula_test",
+        "//internal/molecule:molecule_test",
+        "//internal/processenv:processenv_test",
+        "//internal/rig:rig_test",
+        "//internal/runtime:runtime_test",
+        "//internal/runtime/tmux:tmux_test",
+        "//internal/sling:sling_test",
+        "//scripts:scripts_test",
+    ],
+)
+
 go_test(
     name = "scripts_test",
     srcs = [
@@ -127,6 +178,7 @@ go_test(
         "conversationlane_targets_test.go",
         "docker_session_protocol_test.go",
         "dolt_version_pin_test.go",
+        "fork_retained_test.go",
         "gh_expr_test.go",
         "git_test_env_test.go",
         "githooks_beads_chain_test.go",
@@ -195,6 +247,7 @@ go_test(
         exclude = ["BUILD.bazel"],
     ) + [
         "BUILD.bazel",
+        ":go_test_srcs_labels",
         "//:.bazelrc",
         "//:.bazelversion",
         "//:.goreleaser.yml",
@@ -221,6 +274,9 @@ go_test(
         "//tools/bazel/rules:go_test_run.sh",
         "//tools/bazel/rules:openapi_base_spec.bzl",
     ],
+    env = {
+        "GC_FORK_RETAINED_GO_TEST_SRCS": "$(rootpath :go_test_srcs_labels)",
+    },
     shard_count = 6,
     deps = [
         "//internal/bazeltest",

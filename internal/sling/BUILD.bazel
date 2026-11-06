@@ -65,6 +65,7 @@ go_test(
         "sling_suspension_test.go",
         "sling_sweep_test.go",
         "sling_test.go",
+        "source_blockers_preview_test.go",
         "source_workflow_graph_leg_test.go",
         "source_workflow_supersede_test.go",
         "store_identity_guard_test.go",

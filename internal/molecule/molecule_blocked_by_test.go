@@ -26,6 +26,84 @@ func assertBlocksDependencyOn(t *testing.T, store beads.Store, issueID, dependsO
 	t.Fatalf("dependencies for %s = %+v, want a blocks dependency on %s", issueID, deps, dependsOnID)
 }
 
+// TestInstantiateEntryBlockedByProjectsSafeTopology checks entry projection and
+// the conservative fallback for control graphs.
+func TestInstantiateEntryBlockedByProjectsSafeTopology(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		deps    []formula.RecipeDep
+		control bool
+		want    map[string]bool
+	}{
+		{"chain", []formula.RecipeDep{{StepID: "b", DependsOnID: "a", Type: "blocks"}}, false, map[string]bool{"root": true, "a": true}},
+		{"multiple entries", []formula.RecipeDep{{StepID: "c", DependsOnID: "a", Type: "blocks"}, {StepID: "c", DependsOnID: "b", Type: "blocks"}}, false, map[string]bool{"root": true, "a": true, "b": true}},
+		{"control fallback", []formula.RecipeDep{{StepID: "b", DependsOnID: "a", Type: "blocks"}}, true, map[string]bool{"root": true, "a": true, "b": true, "c": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := beads.NewMemStore()
+			blocker, err := store.Create(beads.Bead{Title: "blocker", Type: "task"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recipe := &formula.Recipe{Name: "root", Steps: []formula.RecipeStep{
+				{ID: "root", IsRoot: true, Type: "task"}, {ID: "a", Type: "task"}, {ID: "b", Type: "task"}, {ID: "c", Type: "task"},
+			}, Deps: tc.deps}
+			if tc.name == "chain" {
+				recipe.Steps = recipe.Steps[:3]
+			}
+			if tc.control {
+				recipe.Steps[2].Metadata = map[string]string{beadmeta.KindMetadataKey: beadmeta.KindScopeCheck}
+			}
+			result, err := Instantiate(context.Background(), beads.WorkMolecule(beadstest.Work(store)), recipe, Options{EntryBlockedBy: []string{blocker.ID}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, step := range recipe.Steps {
+				deps, err := store.DepList(result.IDMapping[step.ID], "down")
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, dep := range deps {
+					if dep.Type == "blocks" && dep.DependsOnID == blocker.ID {
+						found = true
+					}
+				}
+				if found != tc.want[step.ID] {
+					t.Errorf("step %s blocker edge = %v, want %v", step.ID, found, tc.want[step.ID])
+				}
+			}
+		})
+	}
+}
+
+func TestEntryBlockedByDeduplicatesBlockers(t *testing.T) {
+	recipe := &formula.Recipe{Steps: []formula.RecipeStep{{ID: "root", IsRoot: true}, {ID: "a"}, {ID: "b"}}, Deps: []formula.RecipeDep{{StepID: "b", DependsOnID: "a", Type: "blocks"}}}
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want map[string]int
+	}{
+		{"repeated", Options{EntryBlockedBy: []string{"x", " x ", "x"}}, map[string]int{"root": 1, "a": 1, "b": 0}},
+		{"overlap", Options{EntryBlockedBy: []string{"x"}, BlockedBy: []string{" x "}}, map[string]int{"root": 1, "a": 1, "b": 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expanded := expandBlockedBy(recipe, expandEntryBlockedBy(recipe, tc.opts))
+			counts := make(map[string]int)
+			for _, dep := range expanded.ExternalDeps {
+				if dep.DependsOnID == "x" && dep.Type == "blocks" {
+					counts[dep.StepID]++
+				}
+			}
+			for step, want := range tc.want {
+				if counts[step] != want {
+					t.Errorf("step %s edges = %d, want %d", step, counts[step], want)
+				}
+			}
+		})
+	}
+}
+
 // TestInstantiateBlockedByAddsBlocksDepToEveryStep covers the BlockedBy
 // shorthand: one existing blocker id becomes a "blocks" dependency on the root
 // and on every step, written at create time. Blocks edges are deduplicated per
