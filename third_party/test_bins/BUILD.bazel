@@ -10,10 +10,10 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["BUILD.bazel"])
 
 alias(
-    name = "bd_v1_3_2",
+    name = "bd_v1_3_4",
     actual = select({
-        "@platforms//os:macos": "@bd_bin_v1_3_2_darwin_arm64//:bd",
-        "//conditions:default": "@bd_bin_v1_3_2//:bd",
+        "@platforms//os:macos": "@bd_bin_v1_3_4_darwin_arm64//:bd",
+        "//conditions:default": "@bd_bin_v1_3_4//:bd",
     }),
 )
 

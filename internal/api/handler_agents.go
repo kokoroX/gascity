@@ -430,7 +430,7 @@ func (s *Server) findActiveBeadForAssigneesWithFreshness(rig string, live bool, 
 				Limit:    1,
 				Sort:     beads.SortCreatedDesc,
 			}
-			if cached, ok := stores[rn].(cachedListStore); ok {
+			if cached, ok := beads.As[beads.CachedLister](stores[rn]); ok {
 				matches, cacheOK := cached.CachedList(query)
 				if cacheOK {
 					if len(matches) > 0 {
@@ -700,7 +700,7 @@ type agentListSessionEnricher struct {
 func (e *agentListSessionEnricher) enrich(resp *agentResponse, agentCfg config.Agent, qualifiedName, sessionName, sessionID, providerName string) {
 	if !e.built {
 		e.built = true
-		e.factory, e.err = e.server.workerFactory(e.server.state.SessionsBeadStore().Store)
+		e.factory, e.err = e.server.workerFactory(e.server.state.SessionsBeadStore())
 	}
 	if e.err != nil || e.factory == nil {
 		return

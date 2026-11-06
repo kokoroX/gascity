@@ -180,12 +180,21 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 	// degraded cross-store conflict coverage.
 	sourceWorkflowScanWarnings := make(map[string]struct{})
 	var sourceWorkflowScanMessages []string
+	stores := s.state.Stores()
+	workHandle := stores.Work()
+	for _, rig := range stores.Rigs() {
+		if beads.SameStore(rig.Work, store) {
+			workHandle = rig.Work
+			break
+		}
+	}
 	deps := sling.SlingDeps{
-		CityName: s.state.CityName(),
-		CityPath: s.state.CityPath(),
-		Cfg:      s.state.Config(),
-		SP:       s.state.SessionProvider(),
-		Store:    store,
+		CityName:   s.state.CityName(),
+		CityPath:   s.state.CityPath(),
+		Cfg:        s.state.Config(),
+		SP:         s.state.SessionProvider(),
+		Store:      store,
+		WorkHandle: workHandle,
 		// Only a relocated graph binding; with nil the sling domain cooks the
 		// workflow in the sling's selected work store, next to its source
 		// bead, the rule `gc sling` applies through resolveGraphStore.
@@ -654,9 +663,11 @@ func (r apiBeadRouter) Route(_ context.Context, req sling.RouteRequest) error {
 	// The core names the store that holds the bead. Honor it only when it is
 	// the relocated graph binding (a --formula wisp root minted there, #6054);
 	// on a city that relocates nothing the request keeps routing through the
-	// sling's own store, unchanged.
+	// sling's own store, unchanged. Identity is SameStore's: a class handle
+	// over the binding is the binding, where == between a handle and the raw
+	// store would be false.
 	store := r.store
-	if req.Store != nil && req.Store == relocatedGraphStore(r.server.state) {
+	if req.Store != nil && beads.SameStore(req.Store, relocatedGraphStore(r.server.state)) {
 		store = req.Store
 	}
 	if store == nil {

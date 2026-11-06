@@ -1163,6 +1163,15 @@ func applyCanonicalScopeInitDoltEnv(env map[string]string, cityPath, scopeRoot, 
 		if !ok {
 			return fmt.Errorf("missing city beads server binding for inherited rig %s", scopeRoot)
 		}
+		// A local bd-owned city server is not the rig's inherited endpoint.
+		// Clear the city projection already present in the provider environment;
+		// the ownership classifier still preserves that server's own scope.
+		if contract.DoltHostIsLocal(state.DoltHost) {
+			for _, key := range projectedDoltEnvKeys {
+				env[key] = ""
+			}
+			return nil
+		}
 		state.DoltUser = strings.TrimSpace(metadata.User)
 		state.EndpointOrigin = contract.EndpointOriginInheritedCity
 		state.EndpointStatus = contract.EndpointStatusVerified

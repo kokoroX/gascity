@@ -744,6 +744,15 @@ export type ContextAdvisoryTier = {
     Threshold: number | null;
 };
 
+export type ControlCheckUnlaunchablePayload = {
+    bead_id: string;
+    check_path: string;
+    error: string;
+    kind?: string;
+    root_bead_id?: string;
+    store_path?: string;
+};
+
 export type ControlDispatcherScopeGapPayload = {
     rig_context?: string;
     sample_bead_id?: string;
@@ -1390,7 +1399,7 @@ export type EventEmitRequest = {
     type: string;
 };
 
-export type EventPayload = AdapterEventPayload | AgentClaimsPayload | BackendCredentialResolvedPayload | BeadClaimFailedPayload | BeadClaimLoopHeldPayload | BeadClaimRejectedPayload | BeadClaimReleasedPayload | BeadDeadAssigneeReopenedPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BlockedRecomputedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | ConditionalWritesDegradedPayload | ControlDispatcherScopeGapPayload | ControlRootSettleFailedPayload | ControlStalledPayload | ExecutionClaimWindowExpiredPayload | ExecutionStepStalledPayload | FactRecordedPayload | GroupCreatedEventPayload | HookClaimReclaimedStalePayload | InboundEventPayload | MailEventPayload | MoleculeResolvedPayload | NoPayload | OpChangedPayload | OpsRecordingDegradedPayload | OrderInapplicablePayload | OrderSkippedPayload | OrderSuppressedPayload | OutboundChannelMismatchPayload | OutboundEventPayload | ProjectIdentityStampedPayload | Record | RequestAcceptedPayload | RequestFailedPayload | RigCreateSucceededPayload | RigProvisionProgressPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDemandClaimDivergencePayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionPendingClearedPayload | SessionPendingPayload | SessionPoolSlotRetiredAtDrainDeadlinePayload | SessionProgramStatusShadowPayload | SessionResetStalledPayload | SessionStrandedClaimsPayload | SessionStrandedPayload | SessionSubmitSucceededPayload | SessionUnknownStatePayload | SessionWakeRefusedPayload | StorageBindingOutcomePayload | StorageRigPayload | StoreDiskCriticalPayload | StoreDiskWarnPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorRequestPayload | SupervisorShutdownPayload | SupervisorStartedPayload | UnboundEventPayload | WebhookReceivedPayload | WebhookRejectedPayload | WorkLadderPayload | WorkRateLimitedPayload | WorkerOperationEventPayload;
+export type EventPayload = AdapterEventPayload | AgentClaimsPayload | BackendCredentialResolvedPayload | BeadClaimFailedPayload | BeadClaimLoopHeldPayload | BeadClaimRejectedPayload | BeadClaimReleasedPayload | BeadDeadAssigneeReopenedPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BlockedRecomputedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | ConditionalWritesDegradedPayload | ControlCheckUnlaunchablePayload | ControlDispatcherScopeGapPayload | ControlRootSettleFailedPayload | ControlStalledPayload | ExecutionClaimWindowExpiredPayload | ExecutionStepStalledPayload | FactRecordedPayload | GroupCreatedEventPayload | HookClaimReclaimedStalePayload | InboundEventPayload | MailEventPayload | MoleculeResolvedPayload | NoPayload | OpChangedPayload | OpsRecordingDegradedPayload | OrderInapplicablePayload | OrderSkippedPayload | OrderSuppressedPayload | OutboundChannelMismatchPayload | OutboundEventPayload | ProjectIdentityStampedPayload | Record | RequestAcceptedPayload | RequestFailedPayload | RigCreateSucceededPayload | RigProvisionProgressPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDemandClaimDivergencePayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionPendingClearedPayload | SessionPendingPayload | SessionPoolSlotRetiredAtDrainDeadlinePayload | SessionProgramStatusShadowPayload | SessionResetStalledPayload | SessionStrandedClaimsPayload | SessionStrandedPayload | SessionSubmitSucceededPayload | SessionUnknownStatePayload | SessionWakeRefusedPayload | StorageBindingOutcomePayload | StorageRigPayload | StoreDiskCriticalPayload | StoreDiskWarnPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorRequestPayload | SupervisorShutdownPayload | SupervisorStartedPayload | UnboundEventPayload | WebhookReceivedPayload | WebhookRejectedPayload | WorkLadderPayload | WorkRateLimitedPayload | WorkerOperationEventPayload;
 
 export type EventRotateAnchor = {
     /**
@@ -4174,7 +4183,7 @@ export type SessionProgramStatusShadowPayload = {
     /**
      * The decision point.
      */
-    point: 'wait_for_idle' | 'typing_gate' | 'submit_confirm' | 'escape_resend' | 'readiness' | 'startup_ladder' | 'interrupt_settle' | 'pending' | 'wait_idle_preread' | 'execution_backstop' | 'claim_nudge_hold' | 'work_ladder' | 'proved_idle' | 'queued_delivery' | 'drain_reminder' | 'observation';
+    point: 'wait_for_idle' | 'typing_gate' | 'submit_confirm' | 'escape_resend' | 'readiness' | 'startup_ladder' | 'interrupt_settle' | 'pending' | 'wait_idle_preread' | 'execution_backstop' | 'claim_nudge_hold' | 'work_ladder' | 'proved_idle' | 'queued_delivery' | 'drain_reminder' | 'observation' | 'starved_bypass';
     /**
      * What the program-status record would decide.
      */
@@ -4282,6 +4291,10 @@ export type SessionResponse = {
      */
     activity_source?: 'program' | 'transcript';
     agent_kind?: string;
+    /**
+     * The concrete agent identity the session runs as: the agent's qualified name or a pool slot such as rig/worker-1. Sent on every session by Gas City 1.6 and later servers, empty when the session records none; older servers omit it.
+     */
+    agent_name?: string;
     alias?: string;
     attached: boolean;
     configured_named_session?: boolean;
@@ -4319,10 +4332,22 @@ export type SessionResponse = {
     template: string;
     title: string;
     /**
+     * How gc drives the session runtime, for example tmux or acp. Empty when unknown.
+     */
+    transport?: string;
+    /**
      * The turn the session's conversation lane last observed, with the runtime's turn capabilities. Set on a single-session read while the city's conversation lane host runs with a kind of [ops] authoritative, once its observer has recorded the session's runtime row.
      */
     turn?: SessionTurn;
+    /**
+     * Why the controller keeps this open session awake (for example session, config, create, attached, keep-warm, wait, pending, pin), as gc session list's REASON column shows them when no lifecycle reason applies. Sent only on GET /sessions?wake_reasons=true, by servers that compute them.
+     */
+    wake_reasons?: Array<string> | null;
     work_dir?: string;
+    /**
+     * The agent process's canonical working directory (a per-bead worktree when it has one), which work_dir may not be.
+     */
+    worker_dir?: string;
 };
 
 export type SessionStopBody = {
@@ -6602,6 +6627,8 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeCitySuspended) | ({
     type: 'city.unregister_requested';
 } & TypedEventStreamEnvelopeCityUnregisterRequested) | ({
+    type: 'control.check_unlaunchable';
+} & TypedEventStreamEnvelopeControlCheckUnlaunchable) | ({
     type: 'control.dispatcher_scope_gap';
 } & TypedEventStreamEnvelopeControlDispatcherScopeGap) | ({
     type: 'control.root_settle_failed';
@@ -7174,6 +7201,24 @@ export type TypedEventStreamEnvelopeCityUnregisterRequested = {
     subject?: string;
     ts: string;
     type: 'city.unregister_requested';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope control.check_unlaunchable
+ */
+export type TypedEventStreamEnvelopeControlCheckUnlaunchable = {
+    actor: string;
+    depends_on_step_ids?: Array<string>;
+    message?: string;
+    payload: ControlCheckUnlaunchablePayload;
+    run_id?: string;
+    seq: number;
+    session_id?: string;
+    step_id?: string;
+    subject?: string;
+    ts: string;
+    type: 'control.check_unlaunchable';
     workflow?: WorkflowEventProjection;
 };
 
@@ -9149,6 +9194,8 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeCitySuspended) | ({
     type: 'city.unregister_requested';
 } & TypedTaggedEventStreamEnvelopeCityUnregisterRequested) | ({
+    type: 'control.check_unlaunchable';
+} & TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable) | ({
     type: 'control.dispatcher_scope_gap';
 } & TypedTaggedEventStreamEnvelopeControlDispatcherScopeGap) | ({
     type: 'control.root_settle_failed';
@@ -9741,6 +9788,25 @@ export type TypedTaggedEventStreamEnvelopeCityUnregisterRequested = {
     subject?: string;
     ts: string;
     type: 'city.unregister_requested';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope control.check_unlaunchable
+ */
+export type TypedTaggedEventStreamEnvelopeControlCheckUnlaunchable = {
+    actor: string;
+    city: string;
+    depends_on_step_ids?: Array<string>;
+    message?: string;
+    payload: ControlCheckUnlaunchablePayload;
+    run_id?: string;
+    seq: number;
+    session_id?: string;
+    step_id?: string;
+    subject?: string;
+    ts: string;
+    type: 'control.check_unlaunchable';
     workflow?: WorkflowEventProjection;
 };
 
@@ -21545,6 +21611,10 @@ export type GetV0CityByCityNameSessionsData = {
          * Include last output preview.
          */
         peek?: boolean;
+        /**
+         * Include wake_reasons on each open session: why the controller keeps it awake, as gc session list's REASON column shows them. Costs runtime probes per session.
+         */
+        wake_reasons?: boolean;
     };
     url: '/v0/city/{cityName}/sessions';
 };
@@ -21732,6 +21802,10 @@ export type GetV0CityByCityNameStatusData = {
          * When true, omit the expensive store-health, session-count, and work-count blocks for low-cost dashboard polls.
          */
         lite?: boolean;
+        /**
+         * When true, skip the time-bucket and TTL-floor reuse and wait for a build of the body that starts no earlier than the read: one the read starts, or, while another build of this view runs, the one queued behind it, which every read that queued shares. If that build is not done within 10 s, it finishes in the background and the read is answered with the saved body, as a stale-while-revalidate serve is (X-GC-Cache-Refresh rebuilding when the saved body is older than the bead cache); with no saved body the read waits for the build. Every build saves its body for later reads. Default false keeps stale-while-revalidate for pollers.
+         */
+        fresh?: boolean;
     };
     url: '/v0/city/{cityName}/status';
 };

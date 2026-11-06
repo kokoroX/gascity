@@ -6,6 +6,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/beadstest"
 	"github.com/gastownhall/gascity/internal/formula"
 )
 
@@ -61,7 +62,7 @@ func TestInstantiateBlockedByAddsBlocksDepToEveryStep(t *testing.T) {
 		t.Errorf("expanded BlockedBy = %v, want cleared so a second expansion cannot duplicate the edges", expanded.BlockedBy)
 	}
 
-	result, err := Instantiate(context.Background(), store, recipe, Options{BlockedBy: blockedBy})
+	result, err := Instantiate(context.Background(), beads.WorkMolecule(beadstest.Work(store)), recipe, Options{BlockedBy: blockedBy})
 	if err != nil {
 		t.Fatalf("Instantiate: %v", err)
 	}

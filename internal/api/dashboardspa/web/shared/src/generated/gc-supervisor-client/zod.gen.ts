@@ -328,6 +328,15 @@ export const zContextAdvisory = z.object({
     WindowTokens: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }).nullable()
 });
 
+export const zControlCheckUnlaunchablePayload = z.object({
+    bead_id: z.string(),
+    check_path: z.string(),
+    error: z.string(),
+    kind: z.string().optional(),
+    root_bead_id: z.string().optional(),
+    store_path: z.string().optional()
+});
+
 export const zControlDispatcherScopeGapPayload = z.object({
     rig_context: z.string().optional(),
     sample_bead_id: z.string().optional(),
@@ -2205,7 +2214,8 @@ export const zSessionProgramStatusShadowPayload = z.object({
         'proved_idle',
         'queued_delivery',
         'drain_reminder',
-        'observation'
+        'observation',
+        'starved_bypass'
     ]),
     program: z.enum([
         'idle',
@@ -3721,6 +3731,7 @@ export const zSessionResponse = z.object({
     activity: z.string().optional(),
     activity_source: z.enum(['program', 'transcript']).optional(),
     agent_kind: z.string().optional(),
+    agent_name: z.string().optional(),
     alias: z.string().optional(),
     attached: z.boolean(),
     configured_named_session: z.boolean().optional(),
@@ -3747,8 +3758,11 @@ export const zSessionResponse = z.object({
     submission_capabilities: zSubmissionCapabilities.optional(),
     template: z.string(),
     title: z.string(),
+    transport: z.string().optional(),
     turn: zSessionTurn.optional(),
-    work_dir: z.string().optional()
+    wake_reasons: z.array(z.string()).nullish(),
+    work_dir: z.string().optional(),
+    worker_dir: z.string().optional()
 });
 
 export const zListBodySessionResponse = z.object({
@@ -4083,6 +4097,7 @@ export const zEventPayload = z.union([
     zCityLifecyclePayload,
     zCityUnregisterSucceededPayload,
     zConditionalWritesDegradedPayload,
+    zControlCheckUnlaunchablePayload,
     zControlDispatcherScopeGapPayload,
     zControlRootSettleFailedPayload,
     zControlStalledPayload,
@@ -4589,6 +4604,24 @@ export const zTypedEventStreamEnvelopeCityUnregisterRequested = z.object({
     subject: z.string().optional(),
     ts: z.iso.datetime(),
     type: z.literal('city.unregister_requested'),
+    workflow: zWorkflowEventProjection.optional()
+});
+
+/**
+ * TypedEventStreamEnvelope control.check_unlaunchable
+ */
+export const zTypedEventStreamEnvelopeControlCheckUnlaunchable = z.object({
+    actor: z.string(),
+    depends_on_step_ids: z.array(z.string()).optional(),
+    message: z.string().optional(),
+    payload: zControlCheckUnlaunchablePayload,
+    run_id: z.string().optional(),
+    seq: z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    session_id: z.string().optional(),
+    step_id: z.string().optional(),
+    subject: z.string().optional(),
+    ts: z.iso.datetime(),
+    type: z.literal('control.check_unlaunchable'),
     workflow: zWorkflowEventProjection.optional()
 });
 
@@ -6544,6 +6577,7 @@ export const zTypedEventStreamEnvelope = z.discriminatedUnion('type', [
     zTypedEventStreamEnvelopeCityResumed.extend({ type: z.literal('city.resumed') }),
     zTypedEventStreamEnvelopeCitySuspended.extend({ type: z.literal('city.suspended') }),
     zTypedEventStreamEnvelopeCityUnregisterRequested.extend({ type: z.literal('city.unregister_requested') }),
+    zTypedEventStreamEnvelopeControlCheckUnlaunchable.extend({ type: z.literal('control.check_unlaunchable') }),
     zTypedEventStreamEnvelopeControlDispatcherScopeGap.extend({ type: z.literal('control.dispatcher_scope_gap') }),
     zTypedEventStreamEnvelopeControlRootSettleFailed.extend({ type: z.literal('control.root_settle_failed') }),
     zTypedEventStreamEnvelopeControlStalled.extend({ type: z.literal('control.stalled') }),
@@ -7054,6 +7088,25 @@ export const zTypedTaggedEventStreamEnvelopeCityUnregisterRequested = z.object({
     subject: z.string().optional(),
     ts: z.iso.datetime(),
     type: z.literal('city.unregister_requested'),
+    workflow: zWorkflowEventProjection.optional()
+});
+
+/**
+ * TypedTaggedEventStreamEnvelope control.check_unlaunchable
+ */
+export const zTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable = z.object({
+    actor: z.string(),
+    city: z.string(),
+    depends_on_step_ids: z.array(z.string()).optional(),
+    message: z.string().optional(),
+    payload: zControlCheckUnlaunchablePayload,
+    run_id: z.string().optional(),
+    seq: z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    session_id: z.string().optional(),
+    step_id: z.string().optional(),
+    subject: z.string().optional(),
+    ts: z.iso.datetime(),
+    type: z.literal('control.check_unlaunchable'),
     workflow: zWorkflowEventProjection.optional()
 });
 
@@ -9116,6 +9169,7 @@ export const zTypedTaggedEventStreamEnvelope = z.discriminatedUnion('type', [
     zTypedTaggedEventStreamEnvelopeCityResumed.extend({ type: z.literal('city.resumed') }),
     zTypedTaggedEventStreamEnvelopeCitySuspended.extend({ type: z.literal('city.suspended') }),
     zTypedTaggedEventStreamEnvelopeCityUnregisterRequested.extend({ type: z.literal('city.unregister_requested') }),
+    zTypedTaggedEventStreamEnvelopeControlCheckUnlaunchable.extend({ type: z.literal('control.check_unlaunchable') }),
     zTypedTaggedEventStreamEnvelopeControlDispatcherScopeGap.extend({ type: z.literal('control.dispatcher_scope_gap') }),
     zTypedTaggedEventStreamEnvelopeControlRootSettleFailed.extend({ type: z.literal('control.root_settle_failed') }),
     zTypedTaggedEventStreamEnvelopeControlStalled.extend({ type: z.literal('control.stalled') }),
@@ -11590,7 +11644,8 @@ export const zGetV0CityByCityNameSessionsQuery = z.object({
     limit: z.coerce.bigint().gte(BigInt(0)).lte(BigInt(1000)).optional().default(BigInt(100)),
     state: z.string().optional(),
     template: z.string().optional(),
-    peek: z.boolean().optional()
+    peek: z.boolean().optional(),
+    wake_reasons: z.boolean().optional()
 });
 
 /**
@@ -11636,7 +11691,8 @@ export const zGetV0CityByCityNameStatusPath = z.object({
 export const zGetV0CityByCityNameStatusQuery = z.object({
     index: z.string().optional(),
     wait: z.string().optional(),
-    lite: z.boolean().optional()
+    lite: z.boolean().optional(),
+    fresh: z.boolean().optional()
 });
 
 /**

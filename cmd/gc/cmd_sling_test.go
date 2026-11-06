@@ -21,6 +21,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/beadstest"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/events"
@@ -1850,9 +1851,9 @@ mode = "on_demand"
 	if inputConvoyID == "" {
 		t.Fatalf("workflow root %s missing gc.input_convoy_id: %v", root.ID, root.Metadata)
 	}
-	members, err := convoycore.Members(store, inputConvoyID, true)
+	members, err := convoycore.MembersIn(convoycore.MemberClasses{Convoy: beadstest.Work(store)}, inputConvoyID, true)
 	if err != nil {
-		t.Fatalf("convoycore.Members(%s): %v", inputConvoyID, err)
+		t.Fatalf("convoycore.MembersIn(convoycore.MemberClasses{Convoy: beadstest.Work(%s)}, ): %v", inputConvoyID, err)
 	}
 	if len(members) != 1 || members[0].Title != "ship feature" {
 		t.Fatalf("input convoy members = %#v, want the slung work bead", members)
@@ -4608,7 +4609,7 @@ title = "Do work"
 	}
 	var inputConvoy beads.Bead
 	for _, candidate := range inputConvoys {
-		members, err := convoycore.Members(deps.Store, candidate.ID, true)
+		members, err := convoycore.MembersIn(convoycore.MemberClasses{Convoy: beadstest.Work(deps.Store)}, candidate.ID, true)
 		if err != nil {
 			t.Fatalf("members(%s): %v", candidate.ID, err)
 		}
@@ -5178,15 +5179,14 @@ func TestSlingDirectSessionResolverReportsDeferredNamedStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCityConfig: %v", err)
 	}
-	store, err := openCityStoreAt(cityDir)
-	if err != nil {
-		t.Fatalf("openCityStoreAt: %v", err)
-	}
+	// The resolver is handed the session-class store, as sling's callers hand
+	// it one: the store a named session materializes into.
+	store := openCitySessionStoreForTest(t, cityDir)
 
 	var stderr bytes.Buffer
 	var deps slingDeps
 	populateSlingDepsCallbacks(&deps, &stderr)
-	id, ok, err := deps.DirectSessionResolver(store, "", cityDir, cfg, "mayor", "")
+	id, ok, err := deps.DirectSessionResolver(beadstest.Sessions(store), "", cityDir, cfg, "mayor", "")
 	if err != nil || !ok {
 		t.Fatalf("DirectSessionResolver(mayor) = (%q, %v, %v), want a materialized session", id, ok, err)
 	}
@@ -5224,7 +5224,7 @@ func TestCLIDirectSessionResolverMaterializesNamedSessionAliasShadow(t *testing.
 		}},
 	}
 
-	id, ok, err := cliDirectSessionResolver(nil)(store, cfg.Workspace.Name, t.TempDir(), cfg, "claude", "")
+	id, ok, err := cliDirectSessionResolver(nil)(beadstest.Sessions(store), cfg.Workspace.Name, t.TempDir(), cfg, "claude", "")
 	if err != nil {
 		t.Fatalf("cliDirectSessionResolver: %v", err)
 	}
@@ -5258,7 +5258,7 @@ func TestResolveGraphDirectSessionBindingMaterializesNamedSessionAliasShadow(t *
 		}},
 	}
 
-	binding, ok, err := graphroute.ResolveGraphDirectSessionBinding(store, cfg.Workspace.Name, cfg, "claude", "", cliGraphrouteDeps(t.TempDir()))
+	binding, ok, err := graphroute.ResolveGraphDirectSessionBinding(beadstest.Sessions(store), cfg.Workspace.Name, cfg, "claude", "", cliGraphrouteDeps(t.TempDir()))
 	if err != nil {
 		t.Fatalf("ResolveGraphDirectSessionBinding: %v", err)
 	}
@@ -6657,7 +6657,7 @@ func seedConvoyTrackedWorkflow(t *testing.T, store beads.Store, beadID, formulaN
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := convoycore.TrackItem(store, convoy.ID, beadID); err != nil {
+	if err := convoycore.TrackItemIn(convoycore.MemberClasses{Convoy: beadstest.Work(store)}, convoy.ID, beadID); err != nil {
 		t.Fatal(err)
 	}
 	root, err := store.Create(beads.Bead{
@@ -8987,7 +8987,7 @@ func TestBeadMetadataTargetStopsOnParentCycle(t *testing.T) {
 		},
 	}
 
-	if got := sling.BeadMetadataTarget(store, "A"); got != "" {
+	if got := sling.BeadMetadataTarget(beadstest.Work(store), "A"); got != "" {
 		t.Fatalf("BeadMetadataTarget = %q, want empty string", got)
 	}
 }
