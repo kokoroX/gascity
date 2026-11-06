@@ -115,12 +115,10 @@ func attachGraphWorkflow(t *testing.T, deps SlingDeps, sourceID string) SlingRes
 
 // TestSlingAttachGraphFormulaWaitsOnSourceBlockers pins the constraint a
 // graph.v2 attach inherits from its source bead: a source that is blocked
-// cannot start work until that blocker closes, so every step of the workflow it
-// launches must carry the same blocks edge. Without it the entry step is
-// immediately Ready and a worker can claim it before the source's blocker
-// clears.
+// cannot start work until that blocker closes. The entry step carries the
+// blocker and the next step waits on the entry.
 func TestSlingAttachGraphFormulaWaitsOnSourceBlockers(t *testing.T) {
-	t.Run("open blocker is projected onto every workflow bead", func(t *testing.T) {
+	t.Run("open blocker is projected onto entry and root", func(t *testing.T) {
 		deps := sourceBlockerSlingDeps(t)
 		source, err := deps.Store.Create(beads.Bead{Title: "source", Type: "task", Status: "open"})
 		if err != nil {
@@ -139,10 +137,36 @@ func TestSlingAttachGraphFormulaWaitsOnSourceBlockers(t *testing.T) {
 		if len(beadsInWorkflow) < 3 {
 			t.Fatalf("workflow beads = %d, want root plus two steps", len(beadsInWorkflow))
 		}
+		var first, second string
 		for _, b := range beadsInWorkflow {
-			if !containsID(blockingDepIDs(t, deps.Store, b.ID), blocker.ID) {
-				t.Errorf("workflow bead %s has no blocks edge to source blocker %s; deps=%v",
-					b.ID, blocker.ID, blockingDepIDs(t, deps.Store, b.ID))
+			switch b.Metadata[beadmeta.StepIDMetadataKey] {
+			case "graph-work.first":
+				first = b.ID
+			case "graph-work.second":
+				second = b.ID
+			}
+		}
+		if first == "" || second == "" {
+			t.Fatalf("missing steps: first=%q second=%q", first, second)
+		}
+		for _, id := range []string{result.WorkflowID, first} {
+			if !containsID(blockingDepIDs(t, deps.Store, id), blocker.ID) {
+				t.Errorf("%s lacks blocker", id)
+			}
+		}
+		if containsID(blockingDepIDs(t, deps.Store, second), blocker.ID) {
+			t.Errorf("dependent step %s has direct blocker", second)
+		}
+		if !containsID(blockingDepIDs(t, deps.Store, second), first) {
+			t.Errorf("dependent step %s lacks first step dependency", second)
+		}
+		ready, err := deps.Store.Ready()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range ready {
+			if b.ID == first || b.ID == second {
+				t.Errorf("blocked step %s is ready", b.ID)
 			}
 		}
 	})

@@ -712,8 +712,8 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 				return result, fmt.Errorf("instantiating %s %q on %s: %w", errLabel, formulaName, beadID, err)
 			}
 			// The source bead's own blockers constrain the workflow this
-			// launch is about to make claimable. Project them onto every step
-			// at create time; remote blockers are represented by local gates.
+			// launch is about to make claimable. Project them at create time;
+			// remote blockers are represented by local gates.
 			sourceBlockers, remoteBlockers, unprojectableBlockers, err := sourceBlockerIDs(deps, beadID)
 			if err != nil {
 				return result, fmt.Errorf("instantiating %s %q on %s: %w", errLabel, formulaName, beadID, err)
@@ -721,7 +721,7 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 			mResult, err := InstantiateSlingFormula(context.Background(), formulaName, searchPaths, molecule.Options{
 				Title:            opts.Title,
 				Vars:             formulaVars,
-				BlockedBy:        sourceBlockers,
+				EntryBlockedBy:   sourceBlockers,
 				RootBlockers:     gateSourceBlockers(deps.GraphHandle, remoteBlockers),
 				RootMetadata:     opts.rootMetadata(),
 				PriorityOverride: BeadPriorityOverride(deps.Store, graphInv.InputConvoy),
@@ -838,7 +838,7 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 		mResult, err := InstantiateSlingFormula(context.Background(), formulaName, SlingFormulaSearchPaths(deps, a), molecule.Options{
 			Title:            opts.Title,
 			Vars:             formulaVars,
-			BlockedBy:        sourceBlockers,
+			EntryBlockedBy:   sourceBlockers,
 			RootBlockers:     gateSourceBlockers(deps.GraphHandle, remoteBlockers),
 			RootMetadata:     opts.rootMetadata(),
 			PriorityOverride: BeadPriorityOverride(querier, beadID),
@@ -1968,7 +1968,7 @@ func attachBatchFormula(ctx context.Context, opts SlingOpts, deps SlingDeps, chi
 		mResult, err := InstantiateSlingFormula(ctx, formulaName, SlingFormulaSearchPaths(deps, a), molecule.Options{
 			Title:            opts.Title,
 			Vars:             childVars,
-			BlockedBy:        sourceBlockers,
+			EntryBlockedBy:   sourceBlockers,
 			RootBlockers:     gateSourceBlockers(deps.GraphHandle, remoteBlockers),
 			RootMetadata:     opts.rootMetadata(),
 			PriorityOverride: ClonePriorityPtr(child.Priority),

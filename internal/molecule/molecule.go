@@ -50,6 +50,11 @@ type Options struct {
 	// cleared once expanded so the two cannot both be applied.
 	BlockedBy []string
 
+	// EntryBlockedBy projects local blockers onto the root and entry steps.
+	// Control graphs and nonstandard dependencies conservatively retain the
+	// blocker on every step. Callers must supply resolvable IDs.
+	EntryBlockedBy []string
+
 	// RootBlockers creates local blockers after the fenced workflow root exists, before steps are made ready.
 	RootBlockers func(beads.Bead) ([]string, error)
 
@@ -886,6 +891,7 @@ func Instantiate(ctx context.Context, store beads.Store, recipe *formula.Recipe,
 	if err := refuseSessionSteps(recipe.Steps, applyVarDefaults(opts.Vars, recipe.Vars)); err != nil {
 		return nil, err // before any write: a refused recipe creates nothing
 	}
+	opts = expandEntryBlockedBy(recipe, opts)
 	opts = expandBlockedBy(recipe, opts)
 	if !opts.nativeStepTopologyPrepared {
 		recipe = recipeWithNativeStepDependencies(recipe)
@@ -1430,6 +1436,60 @@ func recipeParentDeps(deps []formula.RecipeDep) map[string]string {
 		}
 	}
 	return parents
+}
+
+// expandEntryBlockedBy uses the same recipe edges as instantiation. Control
+// graphs can force-close blocked scope members, so they keep every-step edges.
+func expandEntryBlockedBy(recipe *formula.Recipe, opts Options) Options {
+	if recipe == nil || len(opts.EntryBlockedBy) == 0 {
+		return opts
+	}
+	fallback := false
+	stepIDs := make(map[string]bool, len(recipe.Steps))
+	for _, step := range recipe.Steps {
+		stepIDs[step.ID] = true
+		kind := step.Metadata[beadmeta.KindMetadataKey]
+		if kind != "" && kind != beadmeta.KindWorkflow && kind != beadmeta.KindWisp && kind != beadmeta.KindWorkflowFinalize {
+			fallback = true
+		}
+	}
+	hasPrerequisite := make(map[string]bool)
+	for _, dep := range recipe.Deps {
+		if dep.Type == "parent-child" || dep.Type == "tracks" {
+			continue
+		}
+		if dep.Type != "blocks" || !stepIDs[dep.DependsOnID] {
+			fallback = true
+		}
+		if stepIDs[dep.DependsOnID] {
+			hasPrerequisite[dep.StepID] = true
+		}
+	}
+	if fallback {
+		opts.BlockedBy = append(opts.BlockedBy, opts.EntryBlockedBy...)
+	} else {
+		covered := make(map[string]bool, len(opts.BlockedBy))
+		for _, blocker := range opts.BlockedBy {
+			covered[strings.TrimSpace(blocker)] = true
+		}
+		seen := make(map[string]bool)
+		for _, step := range recipe.Steps {
+			if !step.IsRoot && hasPrerequisite[step.ID] && step.Metadata[beadmeta.KindMetadataKey] != beadmeta.KindWorkflowFinalize {
+				continue
+			}
+			for _, blocker := range opts.EntryBlockedBy {
+				blocker = strings.TrimSpace(blocker)
+				key := step.ID + "\x00" + blocker
+				if blocker == "" || covered[blocker] || seen[key] {
+					continue
+				}
+				seen[key] = true
+				opts.ExternalDeps = append(opts.ExternalDeps, ExternalDep{StepID: step.ID, DependsOnID: blocker, Type: "blocks"})
+			}
+		}
+	}
+	opts.EntryBlockedBy = nil
+	return opts
 }
 
 // expandBlockedBy turns opts.BlockedBy into the equivalent "blocks" external
