@@ -116,3 +116,18 @@ lines only; a new integration-only test file costs one sorted record line.
 The shard rule is `i % shard_total == shard_index - 1` in
 `scripts/test-go-test-shard` (`TestRuntimeTmuxIntegrationShardUsesCheckedManifestOnLinux`
 restates it and runs each shard through the real script).
+
+## Fork-retained regressions are registered in `fork-retained.txt`
+
+This repo is a fork of `gastownhall/gascity`, and merging upstream has silently
+dropped fork-only regression tests and small build-config pins. Every fork
+regression test is registered in `scripts/fork-retained.txt` as
+`test <package dir> <TestName>` (the file must define the func and be in a
+go_test srcs), and every restored build-config line as
+`contains <file> <literal>`; `TestForkRetainedRegressionCoverage` in
+`scripts/fork_retained_test.go` (`//scripts:scripts_test`) checks the list.
+Adding a fork test means adding its entry — under Bazel the go_test srcs
+evidence comes from `//scripts:go_test_srcs_labels`, so a package new to the
+manifest also needs its `<leaf>_test` label in that genquery. When this test
+fails after a merge, the merge dropped something the fork needs: restore the
+test or the pin it names, do not delete the manifest entry.

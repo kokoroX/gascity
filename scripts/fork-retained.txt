@@ -1,0 +1,373 @@
+# Fork-retained regressions.
+#
+# This repo is a fork of gastownhall/gascity. Merging upstream has silently
+# dropped fork-added regression tests (the test stops existing) and small
+# build-config pins (a BUILD data/env entry reverts to upstream's). This file
+# lists what the fork must keep; scripts/fork_retained_test.go
+# (TestForkRetainedRegressionCoverage in //scripts:scripts_test) checks it.
+#
+# Grammar, one directive per line ('#' starts a comment, blank lines ignored):
+#   test <package dir> <TestName>
+#       Some *_test.go in <package dir> must define func <TestName>(, and that
+#       file must be in a go_test srcs of the directory's BUILD.bazel.
+#   contains <repo-relative file> <literal, to end of line>
+#       The file must contain the literal (spaces allowed).
+#
+# Each entry is preceded by the fork commit that added it, so a red run can be
+# repaired by restoring that change rather than deleting the line. Adding a
+# fork test means adding its own "test" entry here. Deleting an entry retires
+# the guard for whatever it covers: restore the lost test or pin instead.
+#
+# Regenerate the test list by extracting the `+func Test...(` lines a
+# `git log --no-merges -p upstream/main..origin/main -- '*_test.go'` adds, then
+# keeping only the functions that still exist on the branch.
+
+# --- fork-only regression tests (source commit — reason) ---
+
+# 74feb321c — fix(beads): pass Dolt credentials to direct external selector init
+test cmd/gc TestApplyPendingProviderExternalEndpointProjectsDirectCredentials
+
+# 0c3986c26 — fix(JikeRental-gascity.18): project bd-owned direct rig credentials per scope (#6)
+test cmd/gc TestApplyResolvedRigDoltEnv_BdOwnedDirectUsesRigEnvPassword
+
+# 0c3986c26 — fix(JikeRental-gascity.18): project bd-owned direct rig credentials per scope (#6)
+test cmd/gc TestApplyResolvedRigDoltEnv_OtherRigUnaffected
+
+# 0c3986c26 — fix(JikeRental-gascity.18): project bd-owned direct rig credentials per scope (#6)
+test cmd/gc TestBdOwnedDirectRigTarget_IgnoresStalePortFile
+
+# df2da109e — fix(bd): skip dolt recovery for provider-owned cities on a foreign server
+test cmd/gc TestBdRuntimeEnvProviderOwnedExternalHostRecovery
+
+# 06e720ddc — fix(pool): realize assigned-work requests on the holder's own row
+test cmd/gc TestBuildDesiredState_FreshWakeReplacementCanClaimAssignedWork
+
+# 8a08eee96 — fix(pool): keep fresh-wake requests off protected sibling seats
+test cmd/gc TestBuildDesiredState_FreshWakeSelectsOwnerWithProtectedSibling
+
+# 06e720ddc — fix(pool): realize assigned-work requests on the holder's own row
+test cmd/gc TestBuildDesiredState_PoolCreateSkipsWorkOwnedByAnotherSession
+
+# f0e00eeb5 — fix(sling): inherit convoy target for beads the convoy tracks
+test cmd/gc TestBuildSlingFormulaVarsInheritsOwnedConvoyTarget
+
+# 374b32fad — fix(JikeRental-gascity.22.1): close patrol wisps on gc stop and direct rig suspend
+test cmd/gc TestClosePatrolWispsFiltersAndCloses
+
+# 374b32fad — fix(JikeRental-gascity.22.1): close patrol wisps on gc stop and direct rig suspend
+test cmd/gc TestClosePatrolWispsPropagatesStoreErrors
+
+# 8a08eee96 — fix(pool): keep fresh-wake requests off protected sibling seats
+test cmd/gc TestComputePoolDesiredStates_FreshWakeKeepsProtectedSibling
+
+# 8a08eee96 — fix(pool): keep fresh-wake requests off protected sibling seats
+test cmd/gc TestComputePoolDesiredStates_WakeKnownIdentityBindsProtectedSibling
+
+# 89e322e93 — fix(gc): decide config-load advisory delivery once, not per call site
+test cmd/gc TestConfigAdvisoryPolicyBypassesStayReviewed
+
+# 89e322e93 — fix(gc): decide config-load advisory delivery once, not per call site
+test cmd/gc TestConfigAdvisoryTargetPolicy
+
+# c39b72603 — fix(gc): deliver config-load advisories only to reporting commands
+test cmd/gc TestConfigLoadMissingBuiltinImportHintSkipsNonReportingCommands
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test cmd/gc TestDoRigAdd_AdoptPersistedIdentitySkipsInit
+
+# 64718c380 — fix(beads): accept bd-owned city endpoints for inherited rigs in doctor and set-endpoint
+test cmd/gc TestDoRigSetEndpointInheritBdOwnedDirectCity
+
+# 89e322e93 — fix(gc): decide config-load advisory delivery once, not per call site
+test cmd/gc TestEmitLoadCityConfigWarningsHonorsAdvisoryPolicy
+
+# c39b72603 — fix(gc): deliver config-load advisories only to reporting commands
+test cmd/gc TestGcBdStillProducesConfigLoadWarnings
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigIgnoresLocalCityBinding
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigKeepsCanonicalCityBinding
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigKeepsManagedCityEndpoint
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigPropagatesDatabaseCheckError
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigRejectsMalformedCityBinding
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigRejectsMissingDatabase
+
+# 43c16387f — fix(beads): init inherited rigs from a bd-owned city's server binding
+test cmd/gc TestInitBeadsForDirInheritedRigUsesBdOwnedCityBinding
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test cmd/gc TestNormalizeCanonicalBdScopeFiles_SkipsBdOwnedRig
+
+# 374b32fad — fix(JikeRental-gascity.22.1): close patrol wisps on gc stop and direct rig suspend
+test cmd/gc TestPatrolAssigneesByScope
+
+# 1496df13b — fix(gc): preserve continuation group across session release
+test cmd/gc TestPreassignHookContinuationGroupAfterRelease
+
+# 0c3986c26 — fix(JikeRental-gascity.18): project bd-owned direct rig credentials per scope (#6)
+test cmd/gc TestPreflightIdentity_BdOwnedDirectDefersOrProbesWithScopedAuth
+
+# e1eeeedca — fix(gc): preserve projected credentials in provider lifecycle env
+test cmd/gc TestProviderOwnedDirectExternalInitPreservesProjectedPassword
+
+# 4f043b9ba — fix(gc): re-arm a ready scope record whose store is gone
+test cmd/gc TestReadyRigRecordWithABindingStaysReady
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test cmd/gc TestReconcileSessionBeads_ProgramStatusIdleDrain
+
+# 6b4c16a3e — fix(reconciler): keep running named sessions when their start config cannot be resolved
+test cmd/gc TestReconcileSessionBeads_UnresolvedPreservedNamedTemplateKeepsRuntime
+
+# 1496df13b — fix(gc): preserve continuation group across session release
+test cmd/gc TestReleaseClaimsPreservesContinuationGroup
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test cmd/gc TestRigStoreOwnerRoundTrip
+
+# e1eeeedca — fix(gc): preserve projected credentials in provider lifecycle env
+test cmd/gc TestRuntimeEnvFiltersUnprojectedInheritedPasswords
+
+# 06e720ddc — fix(pool): realize assigned-work requests on the holder's own row
+test cmd/gc TestSimFreshWakeRoutesToHolderLeavesIdleSeat
+
+# 4f043b9ba — fix(gc): re-arm a ready scope record whose store is gone
+test cmd/gc TestStaleReadyRigRecordIsRearmedBeforeInit
+
+# 4f043b9ba — fix(gc): re-arm a ready scope record whose store is gone
+test cmd/gc TestStaleReadyRigRecordIsRearmedForInit
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test cmd/gc TestStartBeadsLifecycle_BdOwnedRigSkipsInit
+
+# 374b32fad — fix(JikeRental-gascity.22.1): close patrol wisps on gc stop and direct rig suspend
+test cmd/gc TestStopAndRigSuspendKeepPatrolWispsFlags
+
+# 0ed854630 — fix(session): 控制器接管外部创建的 named session bead，消除撞名死锁 (#4)
+test cmd/gc TestSyncSessionBeads_AdoptsExternallyCreatedNamedSessionMissingFromCache
+
+# 0ed854630 — fix(session): 控制器接管外部创建的 named session bead，消除撞名死锁 (#4)
+test cmd/gc TestSyncSessionBeads_AdoptsNamedSessionCommittedBeforeIdentifierLock
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestBDEndpointOptInKeepsProxiedScopeNoop
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestDestructiveCommandsFailClosedOnBDEndpoint
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveEndpointBDEndpointIgnoresProxiedServer
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveEndpointBDEndpointMetadataFallback
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveEndpointBDEndpointPrefersDoltServerPort
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveEndpointBDEndpointRejectsInvalidPort
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveEndpointEnvPortBeatsBDEndpoint
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveEndpointManagedStateBeatsBDEndpoint
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestPortResolveOrDieExplainsBDEndpointWithoutOptIn
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestSQLScriptBDEndpointReachablePassesEndpointArgs
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestSQLScriptBDEndpointUnreachableFailsWithoutEmbedded
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestSQLScriptHasNoDevTCPProbe
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestStatusScriptBDEndpointFallbackIgnoresEnvOptOut
+
+# 06d441e39 — fix(dolt): resolve bd-recorded external endpoints for read-only gc dolt commands
+test examples/bd/dolt TestStatusScriptBDEndpointMetadataPrintsExternalEndpoint
+
+# ccb08b796 — fix(jsonl-export): push the archive's own branch instead of main
+test examples/gastown TestJsonlExportPushesArchiveBranchCreatedFromHostDefaultBranch
+
+# 1913ba4db — fix(JikeRental-gascity.22.2): reaper closes orphan patrol wisps whose holder session is gone
+test examples/gastown TestReaperClosesOrphanPatrolWispsOnlyWhenHolderSessionIsGone
+
+# b8f9ca126 — perf(api): read the session store once per agent list request
+test internal/api TestAgentListEnrichFallsBackToSessionID
+
+# b8f9ca126 — perf(api): read the session store once per agent list request
+test internal/api TestAgentListReadsSessionStoreOnce
+
+# 4c0590db0 — fix(beads): stamp created_by from BEADS_ACTOR in the native store
+test internal/beads TestNativeActorCreatedByCreate
+
+# 4c0590db0 — fix(beads): stamp created_by from BEADS_ACTOR in the native store
+test internal/beads TestNativeActorCreatedByGraphBatch
+
+# 4c0590db0 — fix(beads): stamp created_by from BEADS_ACTOR in the native store
+test internal/beads TestNativeActorCreatedByGraphTransaction
+
+# 4c0590db0 — fix(beads): stamp created_by from BEADS_ACTOR in the native store
+test internal/beads TestNativeActorCreatedByGuardedBatch
+
+# df2da109e — fix(bd): skip dolt recovery for provider-owned cities on a foreign server
+test internal/beads/contract TestScopeMetadataNamesForeignDoltServer
+
+# 64718c380 — fix(beads): accept bd-owned city endpoints for inherited rigs in doctor and set-endpoint
+test internal/beads/contract TestValidateInheritedCityEndpointMirrorAcceptsBdOwnedDirectCity
+
+# 31e7ddee9 — fix(jsonl-export): archive store config and report suspended rigs
+test internal/bootstrap/packs/core TestJSONLExportArchivesStoreConfig
+
+# 31e7ddee9 — fix(jsonl-export): archive store config and report suspended rigs
+test internal/bootstrap/packs/core TestJSONLExportCoversAllSuspendedRigs
+
+# 31e7ddee9 — fix(jsonl-export): archive store config and report suspended rigs
+test internal/bootstrap/packs/core TestJSONLExportCoversNamedSuspendedRig
+
+# 31e7ddee9 — fix(jsonl-export): archive store config and report suspended rigs
+test internal/bootstrap/packs/core TestJSONLExportDeclaresSuspendedRigSkipped
+
+# 31e7ddee9 — fix(jsonl-export): archive store config and report suspended rigs
+test internal/bootstrap/packs/core TestJSONLExportReportsNoChanges
+
+# 31e7ddee9 — fix(jsonl-export): archive store config and report suspended rigs
+test internal/bootstrap/packs/core TestJSONLExportWritesRestoreRecipe
+
+# 5b53cb46f — fix(formula): file polecat findings in the city store, not the rig store
+test internal/bootstrap/packs/core TestPolecatFindingsUseCityStore
+
+# 5e7397e34 — fix(formula): pin polecat workflow steps to one session via continuation group
+test internal/bootstrap/packs/core TestPolecatFormulaStepsShareContinuationGroup
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test internal/config TestApplyRigPatch_LeavesStoreOwnerWhenUnset
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test internal/config TestApplyRigPatch_SetsStoreOwner
+
+# 9f9c8e5a3 — fix(convergence): hand gate scripts the Dolt password and user under bd's names
+test internal/convergence TestConditionEnvEnvironMapsDoltCredentials
+
+# d5df4af1c — fix(doctor): keep the inherited Dolt user when a server scope records none
+test internal/doctor TestCustomTypesStoreEnvServerScopeUserFallsBackToInherited
+
+# 64718c380 — fix(beads): accept bd-owned city endpoints for inherited rigs in doctor and set-endpoint
+test internal/doctor TestRigDoltServerCheck_InheritedRigOfBdOwnedDirectCityIsNotDrift
+
+# 0c3986c26 — fix(JikeRental-gascity.18): project bd-owned direct rig credentials per scope (#6)
+test internal/doltauth TestResolveScopedFromEnvPrefersGCUserOverStoreLocalUser
+
+# 0c3986c26 — fix(JikeRental-gascity.18): project bd-owned direct rig credentials per scope (#6)
+test internal/doltauth TestResolveUsesStoreLocalUserBeforeFallback
+
+# 6a9471ac2 — feat(formula): label materialized graph.v2 workflow beads gc:flow
+test internal/formula TestGraphWorkflowStepsCarryFlowLabel
+
+# 34d5a721a — fix(sling): make graph workflows wait on the source bead's blockers
+test internal/molecule TestInstantiateBlockedByAddsBlocksDepToEveryStep
+
+# 493df63c7 — fix(beads): fall back like bd when BEADS_ACTOR is unset
+test internal/processenv TestResolveBeadsActor
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test internal/rig TestInitRigBeadsStore_AdoptPersistedIdentitySkipsInitStore
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test internal/rig TestInitRigBeadsStore_AdoptWithoutIdentityCallsInitStore
+
+# f41152be3 — fix(JikeRental-gascity.17): never init or rewrite an adopted bd store (#5)
+test internal/rig TestProvision_ReAdoptExistingRigPersistsStoreOwner
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime TestProgramIdleProofFallback
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime TestProgramIdleProofMissingProviderOrName
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime TestProgramIdleProofOn
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime TestProgramIdleProofOnReadFailure
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime TestProgramIdleProofReadingTransitions
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime TestProgramIdleProofReadsFreshAroundTheProof
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime/tmux TestProgramIdleProofRecordsNoWaitForIdle
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime/tmux TestProgramIdleProofTakesTwoObservations
+
+# 08322cb09 — feat(runtime): let on-mode program status decide idle proofs
+test internal/runtime/tmux TestProgramStatusFreshReadOnAndOff
+
+# f0e00eeb5 — fix(sling): inherit convoy target for beads the convoy tracks
+test internal/sling TestBeadMetadataTarget_ConflictingTrackingConvoysInheritNothing
+
+# f0e00eeb5 — fix(sling): inherit convoy target for beads the convoy tracks
+test internal/sling TestBeadMetadataTarget_IgnoresTrackingConvoyWithoutTarget
+
+# f0e00eeb5 — fix(sling): inherit convoy target for beads the convoy tracks
+test internal/sling TestBeadMetadataTarget_InheritsConvoyTrackingAnAncestor
+
+# f0e00eeb5 — fix(sling): inherit convoy target for beads the convoy tracks
+test internal/sling TestBeadMetadataTarget_OwnTargetBeatsTrackingConvoy
+
+# 34d5a721a — fix(sling): make graph workflows wait on the source bead's blockers
+test internal/sling TestSlingAttachGraphFormulaWaitsOnSourceBlockers
+
+# f0e00eeb5 — fix(sling): inherit convoy target for beads the convoy tracks
+test internal/sling TestSlingFormulaTargetBranch_InheritsTrackingConvoyTarget
+
+# 13d20c23d — build(bazel): give go_test_run a watchdog and the pinned test PATH
+test scripts TestGoTestRunScriptDefaultsToThePinnedTestPath
+
+# fix/sling-dependency-queueing — fork-only source-blocker regressions
+test cmd/gc TestDryRunBatchLegacySourceBlockerLookupErrors
+test cmd/gc TestDryRunSourceBlockerUnresolvedDirectAndGate
+test cmd/gc TestDryRunDefaultGraphV2FormulaReportsSourceBlockers
+test cmd/gc TestDryRunDefaultGraphV2FormulaSourceBlockersClosed
+test cmd/gc TestDryRunDefaultGraphV2FormulaSourceBlockerTypes
+test cmd/gc TestDryRunOnGraphV2FormulaReportsSourceBlockers
+test cmd/gc TestDryRunBatchGraphV2FormulaReportsSourceBlockers
+test cmd/gc TestDryRunSourceBlockersLookupErrorIsReported
+test cmd/gc TestDryRunLegacyAttachSourceBlockersNotProjected
+test cmd/gc TestDryRunSourceBlockersStoreIsUnchanged
+test internal/molecule TestInstantiateEntryBlockedByProjectsSafeTopology
+test internal/molecule TestEntryBlockedByDeduplicatesBlockers
+test internal/sling TestSourceBlockerPreviewWorkflowStoreBlocker
+test internal/sling TestSourceBlockerPreviewClosedBlockerIsNotReported
+test internal/sling TestSourceBlockerPreviewBlockingDependencyTypes
+test internal/sling TestSourceBlockerPreviewRemoteBlockerNeedsGate
+test internal/sling TestSourceBlockerPreviewUnresolvedBlocker
+test internal/sling TestSourceBlockerPreviewDepListError
+
+# --- build-config pins: not tests, restored configuration lines ---
+
+# 5438c9aa5 — restores the unit-build dolt pin that a merge of main dropped:
+# the default condition's data carries the pinned dolt release.
+contains cmd/gc/BUILD.bazel "//conditions:default": ["@dolt_bin_v2_6_0//:dolt-linux-amd64/bin/dolt"],
+
+# 5438c9aa5 — and the unit build's GC_TEST_TOOL_PATHS puts that dolt first on
+# PATH, so gc init's dependency check stops depending on the worker host.
+contains cmd/gc/BUILD.bazel "GC_TEST_TOOL_PATHS": "$(rootpath @dolt_bin_v2_6_0//:dolt-linux-amd64/bin/dolt)",
