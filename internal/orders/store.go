@@ -179,6 +179,14 @@ type RunOpts struct {
 	// the trigger-env-failed pre-dispatch path which creates an already-labeled
 	// open bead so the open-work gate suppresses repeat ticks.
 	Outcome RunOutcome
+
+	// Actor, when non-empty, is the created_by the tracking bead is stamped
+	// with instead of the store's own actor. The dispatch runs inside the
+	// CONTROLLER process, whose store actor is the controller's, so without
+	// this every order run is attributed to the controller rather than to the
+	// order that fired. See beads.ActorCreateStore; a store without that
+	// capability creates the bead under its own actor, as before.
+	Actor string
 }
 
 // Store is the order-class domain wrapper. It holds the strongly-typed
@@ -303,12 +311,14 @@ func baseLabels(scoped string, outcome RunOutcome) []string {
 // replacement for the store.Create(beads.Bead{Title:"order:"+scoped, Labels:
 // {order-run, order-tracking[, outcome]}, NoHistory:true}) sites in
 // order_dispatch.go.
+//
+// opts.Actor, when set, is the bead's created_by (see beads.ActorCreateStore).
 func (s *Store) CreateRun(scoped string, opts RunOpts) (OrderRun, error) {
-	created, err := s.store.Create(beads.Bead{
+	created, err := createTrackingBead(s.store, beads.Bead{
 		Title:     trackingTitle(scoped),
 		Labels:    baseLabels(scoped, opts.Outcome),
 		NoHistory: true,
-	})
+	}, opts.Actor)
 	if err != nil {
 		return OrderRun{}, fmt.Errorf("creating order run for %q: %w", scoped, err)
 	}
@@ -319,6 +329,23 @@ func (s *Store) CreateRun(scoped string, opts RunOpts) (OrderRun, error) {
 		CreatedAt: created.CreatedAt,
 		Open:      true,
 	}, nil
+}
+
+// createTrackingBead creates a tracking bead, naming actor as its creator when
+// the store can stamp one and the caller named one.
+//
+// The actor is optional because it is a capability, not part of the Store
+// contract: a provider with no actor concept (MemStore, FileStore) has nothing
+// to override, and the tracking bead still has to exist for the dispatch to run.
+// Falling back to the store's own actor is therefore the pre-existing behavior,
+// not a swallowed error — no write is skipped.
+func createTrackingBead(store beads.OrdersStore, b beads.Bead, actor string) (beads.Bead, error) {
+	if actor = strings.TrimSpace(actor); actor != "" {
+		if actorStore, ok := beads.As[beads.ActorCreateStore](store); ok {
+			return actorStore.CreateWithActor(b, actor)
+		}
+	}
+	return store.Create(b)
 }
 
 // SetOutcome stamps the outcome label set on an existing tracking bead. It is

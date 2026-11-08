@@ -164,3 +164,60 @@ func TestNativeActorCreatedByGraphTransaction(t *testing.T) {
 		}
 	})
 }
+
+// TestNativeActorCreateWithActor pins the per-create actor the order front door
+// uses for a tracking bead.
+//
+// The controller's store is opened once, with the controller as its actor, so
+// every create it makes would be attributed to the controller — including the
+// order-tracking bead a scheduled order's dispatch writes in the controller
+// process. CreateWithActor names the actor for that one create; the store's own
+// actor keeps every other write it makes.
+func TestNativeActorCreateWithActor(t *testing.T) {
+	var captured *beadslib.Issue
+	var capturedActor string
+	storage := &nativeDoltStorageSpy{
+		createIssue: func(_ context.Context, issue *beadslib.Issue, actor string) error {
+			captured = cloneNativeIssueForTest(issue)
+			capturedActor = actor
+			issue.ID = "gc-created"
+			return nil
+		},
+		getIssue: func(context.Context, string) (*beadslib.Issue, error) {
+			return cloneNativeIssueForTest(captured), nil
+		},
+	}
+	store := nativeActorStore(storage, []NativeDoltStoreOption{WithNativeActor("controller")})
+
+	for _, tc := range []struct {
+		name  string
+		actor string
+		want  string
+	}{
+		{name: "order", actor: "order:dolt-health", want: "order:dolt-health"},
+		{name: "trimmed", actor: "  order:dolt-health  ", want: "order:dolt-health"},
+		{name: "blank", actor: "   ", want: "controller"},
+		{name: "empty", actor: "", want: "controller"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			captured, capturedActor = nil, ""
+			if _, err := store.CreateWithActor(Bead{Title: "order:dolt-health"}, tc.actor); err != nil {
+				t.Fatalf("CreateWithActor: %v", err)
+			}
+			if captured == nil {
+				t.Fatal("CreateWithActor did not reach storage")
+			}
+			if captured.CreatedBy != tc.want || capturedActor != tc.want {
+				t.Errorf("CreatedBy=%q actor=%q, want %q for both", captured.CreatedBy, capturedActor, tc.want)
+			}
+		})
+	}
+
+	captured, capturedActor = nil, ""
+	if _, err := store.Create(Bead{Title: "controller housekeeping"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if captured == nil || captured.CreatedBy != "controller" || capturedActor != "controller" {
+		t.Fatalf("plain Create after CreateWithActor stamped CreatedBy=%q actor=%q, want the store's own controller actor for both", captured.CreatedBy, capturedActor)
+	}
+}

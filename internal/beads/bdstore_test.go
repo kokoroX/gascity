@@ -127,6 +127,46 @@ func TestBdStoreCreateDefaultsTypeToTask(t *testing.T) {
 	}
 }
 
+// TestBdStoreCreateWithActorPassesActor pins the bd-backed half of the
+// per-create actor: bd resolves the creator from this process's BEADS_ACTOR
+// unless the create names one, so a bead written on behalf of an order would be
+// attributed to the controller process.
+func TestBdStoreCreateWithActorPassesActor(t *testing.T) {
+	var gotArgs []string
+	runner := func(_, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(`{"id":"bd-x","title":"order:dolt-health","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}`), nil
+	}
+	s := beads.NewBdStore("/city", runner)
+	if _, err := s.CreateWithActor(beads.Bead{Title: "order:dolt-health"}, "order:dolt-health"); err != nil {
+		t.Fatal(err)
+	}
+	if args := strings.Join(gotArgs, " "); !strings.Contains(args, "--actor order:dolt-health") {
+		t.Errorf("args = %q, want to contain '--actor order:dolt-health'", args)
+	}
+}
+
+// TestBdStoreCreateWithActorBlankKeepsAmbientActor keeps the ordinary create
+// path byte-identical: an unnamed actor adds no flag, so bd's own resolution
+// (BEADS_ACTOR) still decides the creator.
+func TestBdStoreCreateWithActorBlankKeepsAmbientActor(t *testing.T) {
+	var gotArgs []string
+	runner := func(_, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(`{"id":"bd-x","title":"test","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}`), nil
+	}
+	s := beads.NewBdStore("/city", runner)
+	for _, actor := range []string{"", "   "} {
+		gotArgs = nil
+		if _, err := s.CreateWithActor(beads.Bead{Title: "test"}, actor); err != nil {
+			t.Fatal(err)
+		}
+		if args := strings.Join(gotArgs, " "); strings.Contains(args, "--actor") {
+			t.Errorf("args = %q for actor %q, want no --actor flag", args, actor)
+		}
+	}
+}
+
 func TestBdStoreCreatePreservesExplicitType(t *testing.T) {
 	var gotArgs []string
 	runner := func(_, _ string, args ...string) ([]byte, error) {

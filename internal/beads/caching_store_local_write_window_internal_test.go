@@ -57,6 +57,10 @@ func (s *windowStore) CreateWithStorage(b Bead, _ StorageClass) (Bead, error) {
 	return s.Create(b)
 }
 
+func (s *windowStore) CreateWithActor(b Bead, _ string) (Bead, error) {
+	return s.Create(b)
+}
+
 func (s *windowStore) Update(id string, opts UpdateOpts) error {
 	err := s.MemStore.Update(id, opts)
 	s.after()
@@ -292,6 +296,10 @@ func TestCachingStoreYieldCoversEveryWriteFromStartToAbsorb(t *testing.T) {
 			_, err := cache.CreateWithStorage(Bead{Title: "local"}, StorageNoHistory)
 			return err
 		}},
+		{name: "CreateWithActor", targets: func(windowSeed) []string { return nil }, write: func(cache *CachingStore, _ windowSeed) error {
+			_, err := cache.CreateWithActor(Bead{Title: "local"}, "order:dolt-health")
+			return err
+		}},
 		{name: "Update", write: func(cache *CachingStore, s windowSeed) error {
 			title := "renamed"
 			return cache.Update(s.id, UpdateOpts{Title: &title})
@@ -450,7 +458,7 @@ func TestCachingStoreYieldWindowTableCoversTheCensus(t *testing.T) {
 
 	covered := map[string]bool{}
 	for _, name := range []string{
-		"Create", "CreateWithStorage", "Update", "Close", "Reopen", "CloseAll", "SetMetadata",
+		"Create", "CreateWithStorage", "CreateWithActor", "Update", "Close", "Reopen", "CloseAll", "SetMetadata",
 		"SetMetadataBatch", "DepAdd", "DepRemove", "Delete", "DeleteBatch", "DeleteIfMatch", "Tx",
 		"UpdateIfMatch", "CloseIfMatch", "CompareAndSetMetadataKey", "ReleaseIfCurrent",
 		"TransferIfCurrent", "Claim", "UpdateIfAssignment",

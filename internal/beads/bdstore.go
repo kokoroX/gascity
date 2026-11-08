@@ -557,6 +557,7 @@ const (
 var (
 	_ ConditionalAssignmentReleaser = (*BdStore)(nil)
 	_ ConditionalAssigneeTransferer = (*BdStore)(nil)
+	_ ActorCreateStore              = (*BdStore)(nil)
 )
 
 // BdStoreOption configures optional bd CLI behavior for a BdStore.
@@ -1524,9 +1525,26 @@ func (s *BdStore) Create(b Bead) (Bead, error) {
 	return s.CreateWithStorage(b, StorageDefault)
 }
 
+// CreateWithActor persists a new bead via bd create under an explicit actor
+// instead of the one bd resolves from this process's environment
+// (BEADS_ACTOR). It is ActorCreateStore: the controller writes an order-tracking
+// bead for the order that fired, and bd would otherwise stamp the controller's
+// own actor on it. A blank actor leaves bd's own resolution in place.
+func (s *BdStore) CreateWithActor(b Bead, actor string) (Bead, error) {
+	noteSessionCreate(b)
+	return s.createWithStorageActor(b, StorageDefault, actor)
+}
+
 // CreateWithStorage persists a new bead via bd create using a storage tier
 // selected by policy middleware.
 func (s *BdStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, error) {
+	return s.createWithStorageActor(b, storage, "")
+}
+
+// createWithStorageActor is the shared bd create body: storage selects the
+// tier, and a non-blank actor is passed as --actor so the row's created_by is
+// the caller's actor rather than the process's.
+func (s *BdStore) createWithStorageActor(b Bead, storage StorageClass, actor string) (Bead, error) {
 	if err := bdSplitSafeLabels(b.Labels); err != nil {
 		return Bead{}, fmt.Errorf("bd create: %w", err)
 	}
@@ -1542,6 +1560,13 @@ func (s *BdStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, error) 
 		typ = "task"
 	}
 	args := []string{"create", "--json", b.Title, "-t", typ}
+	// --actor names the creator for this one create; bd resolves it from
+	// BEADS_ACTOR otherwise, which is this process's identity, not the
+	// caller's. It is a bd ROOT flag, so it rides ahead of the verb like the
+	// other global flags bdTransientWriteArgs adds.
+	if actor = strings.TrimSpace(actor); actor != "" {
+		args = append([]string{"--actor", actor}, args...)
+	}
 	hasStableID := false
 	if id := strings.TrimSpace(b.ID); id != "" {
 		args = append(args, "--id", id)

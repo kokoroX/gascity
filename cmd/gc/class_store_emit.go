@@ -635,6 +635,32 @@ func (s *emittingClassStore) CreateWithForeignID(bead beads.Bead) (beads.Bead, e
 	return created, err
 }
 
+// CreateWithActor forwards a create under an explicit actor (beads.
+// ActorCreateStore) and emits bead.created for the landed row, exactly as
+// Create does. Forwarded explicitly because the embedded Store interface
+// strips optional capabilities: dropping it here would not fail a caller, it
+// would silently attribute the order-tracking bead to the controller's actor
+// again — the whole reason a per-create actor exists.
+//
+// The wrapper carries the method for every engine, so a caller's assertion
+// always matches it, including over the SQLite engine, which has no
+// per-create actor. Over such an engine it does what the caller does when the
+// capability is absent: the plain create, attributed to the store's own
+// actor, because the bead still has to be written.
+func (s *emittingClassStore) CreateWithActor(bead beads.Bead, actor string) (beads.Bead, error) {
+	creator, ok := beads.As[beads.ActorCreateStore](s.Store)
+	if !ok {
+		// The backing cannot attribute a create to somebody else (the SQLite
+		// engine, a mem store): take the plain create, which stamps the
+		// store's own actor — the same answer the caller takes when the
+		// capability is absent — and still announce the bead.
+		return s.Create(bead)
+	}
+	created, err := creator.CreateWithActor(bead, actor)
+	s.emitCreated(created, err)
+	return created, err
+}
+
 func (s *emittingClassStore) UpdateIfMatch(id string, revision int64, opts beads.UpdateOpts) error {
 	writer, ok := beads.ConditionalWriterFor(s.Store)
 	if !ok {

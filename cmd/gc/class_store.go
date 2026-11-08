@@ -178,8 +178,8 @@ func (cr *CityRuntime) cityWorkStore() beads.WorkStore {
 
 // createTarget returns the inner store that owns creates of the given
 // coordination class for this policy-wrapped store. It is the create-side seam:
-// the create chokepoint (Create / ApplyGraphPlan / the wisp-root lookup in
-// policyForCreate) routes through it instead of reaching for the embedded store
+// the create chokepoint (Create / CreateWithActor / ApplyGraphPlan / the
+// wisp-root lookup in storageForCreate) routes through it instead of reaching for the embedded store
 // directly, so a future per-class split changes only this method. A
 // beadPolicyStore wraps exactly one underlying store today, so every class
 // collapses to that same embedded store and createTarget is identity — it

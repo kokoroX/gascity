@@ -94,6 +94,7 @@ go_test(
         "run_record_test.go",
         "runtime_helpers_test.go",
         "scanner_test.go",
+        "store_actor_test.go",
         "store_reads_bounded_test.go",
         "store_reads_test.go",
         "store_test.go",

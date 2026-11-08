@@ -153,6 +153,20 @@ func resolveOrderExecTarget(cityPath string, cfg *config.City, a orders.Order) (
 	return resolveOrderStoreTarget(cityPath, cfg, a)
 }
 
+// orderActor is the actor an order's own writes are attributed to: the order's
+// NAME, not its scoped title. It is the one spelling of "order:<name>" for both
+// the exec subprocess's BEADS_ACTOR and the created_by the controller stamps on
+// the order-tracking bead, so a rig-scoped order (whose tracking TITLE is
+// order:<name>:rig:<rig>) still attributes to the same actor in both places.
+// An order with no name has no actor, and the caller keeps the store's own.
+func orderActor(a orders.Order) string {
+	name := strings.TrimSpace(a.Name)
+	if name == "" {
+		return ""
+	}
+	return "order:" + name
+}
+
 func orderStoreTargetKey(target execStoreTarget) string {
 	return target.ScopeKind + "\x00" + filepath.Clean(target.ScopeRoot)
 }
@@ -178,8 +192,8 @@ func orderExecEnvWithError(cityPath string, cfg *config.City, target execStoreTa
 	// Tag every bd interaction this exec order produces with the order's
 	// name so audit logs and the dashboard can attribute housekeeping
 	// activity to the responsible order rather than an ambient identity.
-	if name := strings.TrimSpace(a.Name); name != "" {
-		env["BEADS_ACTOR"] = "order:" + name
+	if actor := orderActor(a); actor != "" {
+		env["BEADS_ACTOR"] = actor
 	}
 	if target.ScopeKind == "rig" {
 		env["GC_RIG"] = target.RigName
