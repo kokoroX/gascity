@@ -1030,7 +1030,10 @@ func (m *memoryOrderDispatcher) fireCandidate(ctx context.Context, cand *orderDi
 		logDispatchError(m.stderr, "gc: order dispatch: building trigger env for %s: %s", a.ScopedName(), redacted)
 		// Leave this open so the existing open-work gate suppresses repeat
 		// ticks until the normal stale tracking sweep gives the order another try.
-		trackingBead, createErr := m.orderFrontDoorFor(store).CreateRun(scoped, orders.RunOpts{Outcome: orders.RunOutcomeTriggerEnvFailed})
+		trackingBead, createErr := m.orderFrontDoorFor(store).CreateRun(scoped, orders.RunOpts{
+			Outcome: orders.RunOutcomeTriggerEnvFailed,
+			Actor:   orderActor(a),
+		})
 		if createErr != nil {
 			logDispatchError(m.stderr, "gc: order dispatch: creating trigger env failure tracking bead for %s: %v", scoped, createErr)
 		} else {
@@ -1191,7 +1194,10 @@ func (m *memoryOrderDispatcher) runDispatchGuarded(ctx context.Context, store be
 // A caller tracking its own WaitGroup must register it before calling and
 // release it in onDone (and, on a returned error, itself — nothing launched).
 func (m *memoryOrderDispatcher) launchResolvedDispatch(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath string, vars, execEnv map[string]string, onDone func()) (orders.OrderRun, error) {
-	trackingRun, err := m.orderFrontDoorFor(store).CreateRun(a.ScopedName(), orders.RunOpts{})
+	// The tracking bead is written in the CONTROLLER process, whose store was
+	// opened with the controller as its actor, so the order that fired is
+	// named here or the run is attributed to the controller forever.
+	trackingRun, err := m.orderFrontDoorFor(store).CreateRun(a.ScopedName(), orders.RunOpts{Actor: orderActor(a)})
 	if err != nil {
 		return orders.OrderRun{}, err
 	}

@@ -605,6 +605,7 @@ var (
 	_ EphemeralGraphApplyStore      = (*NativeDoltStore)(nil)
 	_ conditionalWritesModeCarrier  = (*NativeDoltStore)(nil)
 	_ ForeignIDCreator              = (*NativeDoltStore)(nil)
+	_ ActorCreateStore              = (*NativeDoltStore)(nil)
 )
 
 func newNativeDoltStoreWithStorage(storage beadslib.Storage, actor string) *NativeDoltStore {
@@ -1530,6 +1531,16 @@ func (s *NativeDoltStore) CreateWithForeignID(b Bead) (Bead, error) {
 	return s.create(b, true)
 }
 
+// CreateWithActor creates b stamping actor as its creator instead of the store's
+// own actor. It is ActorCreateStore: the per-create attribution a caller needs
+// when it writes a bead on behalf of somebody else inside its own process — the
+// controller writing an order-tracking bead for the order that fired. A blank
+// actor means the store's own. See ActorCreateStore for why this is per call
+// rather than a store setting.
+func (s *NativeDoltStore) CreateWithActor(b Bead, actor string) (Bead, error) {
+	return s.createAs(b, actor, false)
+}
+
 // create is the shared body. allowForeign is the CreateWithForeignID exemption.
 //
 // The fence runs FIRST — before the bead is converted, before the storage
@@ -1538,6 +1549,12 @@ func (s *NativeDoltStore) CreateWithForeignID(b Bead) (Bead, error) {
 // sequence, and cannot reveal through its refusal whether the store already
 // holds a relic under that id.
 func (s *NativeDoltStore) create(b Bead, allowForeign bool) (Bead, error) {
+	return s.createAs(b, s.actor, allowForeign)
+}
+
+// createAs is create with the creator named: actor stamps the row's created_by
+// and the write's own actor. A blank actor falls back to the store's.
+func (s *NativeDoltStore) createAs(b Bead, actor string, allowForeign bool) (Bead, error) {
 	if err := s.readOnlyGuard(); err != nil {
 		return Bead{}, err
 	}
@@ -1546,12 +1563,15 @@ func (s *NativeDoltStore) create(b Bead, allowForeign bool) (Bead, error) {
 			return Bead{}, err
 		}
 	}
+	if actor = strings.TrimSpace(actor); actor == "" {
+		actor = s.actor
+	}
 	issue, err := nativeIssueFromBead(b)
 	if err != nil {
 		return Bead{}, err
 	}
-	issue.CreatedBy = s.actor
-	request, err := nativeCreateRequestFromIssue(s.actor, issue)
+	issue.CreatedBy = actor
+	request, err := nativeCreateRequestFromIssue(actor, issue)
 	if err != nil {
 		return Bead{}, err
 	}

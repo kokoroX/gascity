@@ -54,6 +54,16 @@ var (
 // *beadPolicyStore.
 func (s *beadPolicyStore) ConditionalWritesResolveTarget() beads.Store { return s.Store }
 
+// The policy layer is the outermost wrapper every caller holds, so it is the
+// layer whose silence would make the per-create actor unreachable: dropping
+// beads.ActorCreateStore here would send every create back through the embedded
+// Store's own actor, and no caller could tell. beadPolicyGraphStore inherits it
+// through the embedded *beadPolicyStore.
+var (
+	_ beads.ActorCreateStore = (*beadPolicyStore)(nil)
+	_ beads.ActorCreateStore = (*beadPolicyGraphStore)(nil)
+)
+
 var (
 	_ beads.BatchDeleter           = (*beadPolicyStore)(nil)
 	_ beads.BatchDeleter           = (*beadPolicyGraphStore)(nil)
@@ -125,8 +135,20 @@ func unwrapBeadPolicyStore(store beads.Store) (beads.Store, *beadPolicyStore, bo
 }
 
 func (s *beadPolicyStore) Create(b beads.Bead) (beads.Bead, error) {
-	_, storage := s.policyForCreate(b)
-	return createWithStoragePolicy(s.createTarget(coordclass.Classify(b)), b, storage)
+	return createWithStoragePolicy(s.createTarget(coordclass.Classify(b)), b, s.storageForCreate(b), "")
+}
+
+// CreateWithActor implements beads.ActorCreateStore: it applies exactly the
+// policy Create applies, then names actor as the bead's creator.
+//
+// Forwarded explicitly because the embedded Store interface strips optional
+// capabilities. The stake here is silent rather than loud: a caller that fell
+// back to the store's own actor would still write the bead, just attributed to
+// whoever opened the store — which is the whole reason a per-create actor
+// exists. The policy layer is the OUTERMOST wrapper every caller holds, so
+// without this forward no caller could reach the capability at all.
+func (s *beadPolicyStore) CreateWithActor(b beads.Bead, actor string) (beads.Bead, error) {
+	return createWithStoragePolicy(s.createTarget(coordclass.Classify(b)), b, s.storageForCreate(b), actor)
 }
 
 func (s *beadPolicyStore) List(query beads.ListQuery) ([]beads.Bead, error) {
@@ -519,18 +541,21 @@ func (s *beadPolicyStore) Claim(id, assignee string) (beads.Bead, bool, error) {
 	return claimer.Claim(id, assignee)
 }
 
-func (s *beadPolicyStore) policyForCreate(b beads.Bead) (string, string) {
+// storageForCreate returns the storage tier policy names for a new bead of this
+// shape: the wisp tier a persisted wisp root already holds, else the tier the
+// bead's own policy names, else "" (no policy — the store's default).
+func (s *beadPolicyStore) storageForCreate(b beads.Bead) string {
 	if rootID := strings.TrimSpace(b.Metadata[beadmeta.RootBeadIDMetadataKey]); rootID != "" {
 		root, err := s.createTarget(coordclass.ClassGraph).Get(rootID)
 		if err == nil && policyNameForBead(root) == beadPolicyWisp {
-			return beadPolicyWisp, storageFromPersistedWispRoot(root)
+			return storageFromPersistedWispRoot(root)
 		}
 	}
 	policyName := policyNameForBead(b)
 	if policyName == "" {
-		return "", ""
+		return ""
 	}
-	return policyName, effectiveBeadStorage(s.cfg, policyName)
+	return effectiveBeadStorage(s.cfg, policyName)
 }
 
 func storageFromPersistedWispRoot(root beads.Bead) string {
@@ -705,7 +730,24 @@ func normalizeBeadStorage(storage string) string {
 	return config.NormalizeBeadPolicyStorage(storage)
 }
 
-func createWithStoragePolicy(store beads.Store, b beads.Bead, storage string) (beads.Bead, error) {
+// createWithStoragePolicy is the one create body the policy layer uses: it
+// selects the storage tier policy names, and, when actor is non-empty, names
+// the bead's creator instead of the store's own (beads.ActorCreateStore).
+//
+// The actor rides on the same create as the tier — the tier is a table
+// selection derived from the bead's own Ephemeral/NoHistory flags, which
+// applyBeadStorage sets — so one write carries both. A store with no actor
+// capability takes the ordinary path unchanged: the row still has to be
+// written, attributed as before.
+func createWithStoragePolicy(store beads.Store, b beads.Bead, storage, actor string) (beads.Bead, error) {
+	if actor = strings.TrimSpace(actor); actor != "" {
+		if actorStore, ok := beads.As[beads.ActorCreateStore](store); ok {
+			if storage != "" {
+				b = applyBeadStorage(b, storage)
+			}
+			return actorStore.CreateWithActor(b, actor)
+		}
+	}
 	if storage == "" {
 		return store.Create(b)
 	}

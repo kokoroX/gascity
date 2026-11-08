@@ -14,6 +14,24 @@ func (c *CachingStore) Create(b Bead) (Bead, error) {
 	})
 }
 
+// CreateWithActor passes through to the backing store's ActorCreateStore with an
+// explicit actor, then updates the cache exactly as Create does. It is forwarded
+// explicitly because the embedded Store interface strips optional capabilities:
+// a create that fell back to the cache's ordinary path would stamp the backing
+// store's own actor and attribute the row to whoever opened the store.
+//
+// A backing store with no actor concept answers through the ordinary create,
+// like every other capability miss here: the row still has to be written.
+func (c *CachingStore) CreateWithActor(b Bead, actor string) (Bead, error) {
+	actorStore, ok := c.backing.(ActorCreateStore)
+	if !ok {
+		return c.Create(b)
+	}
+	return c.createWith(func() (Bead, error) {
+		return actorStore.CreateWithActor(b, actor)
+	})
+}
+
 // CreateWithStorage passes through a policy-selected storage class to backing
 // stores that support table-specific creates, then updates the cache.
 func (c *CachingStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, error) {

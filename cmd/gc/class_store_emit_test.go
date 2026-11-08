@@ -1728,6 +1728,70 @@ func TestMainStoreSessionCreateOverAnEngineWithoutStorageCreate(t *testing.T) {
 	}
 }
 
+// The emitter carries CreateWithActor for every engine
+// (TestEmittingClassStoreKeepsEveryEngineCapability). Over a backing that has
+// the capability it must actually reach it: a dropped forward would not fail,
+// it would attribute every order-tracking bead to whoever opened the store.
+func TestEmittingClassStoreForwardsCreateWithActor(t *testing.T) {
+	cityPath := t.TempDir()
+	backing := newOrderActorStampingStore("controller", "gcg")
+	wrapped := &emittingClassStore{Store: backing, cityPath: cityPath}
+
+	created, err := wrapped.CreateWithActor(beads.Bead{Title: "order:dolt-health"}, "order:dolt-health")
+	if err != nil {
+		t.Fatalf("CreateWithActor through the emitter: %v", err)
+	}
+	creates := backing.stampedCreates()
+	if len(creates) != 1 {
+		t.Fatalf("backing creates = %+v, want exactly the one tracking bead", creates)
+	}
+	if !creates[0].viaCap || creates[0].actor != "order:dolt-health" {
+		t.Errorf("the create reached the backing as created_by %q (named=%v), want order:dolt-health through the capability", creates[0].actor, creates[0].viaCap)
+	}
+
+	announced := 0
+	for _, evt := range beadEvents(readCityJournal(t, cityPath)) {
+		if evt.Subject == created.ID && evt.Type == events.BeadCreated {
+			announced++
+		}
+	}
+	if announced != 1 {
+		t.Fatalf("the create appended %d bead.created row(s) for %s, want exactly 1", announced, created.ID)
+	}
+}
+
+// Over a backing with no actor concept the emitter still advertises the
+// capability, so it must answer as the caller's absent-capability path does:
+// write the bead under the store's own actor and announce it. Refusing would
+// drop the order run's tracking bead entirely.
+func TestEmittingClassStoreCreateWithActorFallsBackWithoutTheCapability(t *testing.T) {
+	cityPath := t.TempDir()
+	leaf := beads.NewMemStore()
+	wrapped := &emittingClassStore{Store: leaf, cityPath: cityPath}
+
+	created, err := wrapped.CreateWithActor(beads.Bead{Title: "order:dolt-health"}, "order:dolt-health")
+	if err != nil {
+		t.Fatalf("CreateWithActor over a backing without the capability: %v", err)
+	}
+	row, err := leaf.Get(created.ID)
+	if err != nil {
+		t.Fatalf("the tracking bead did not land in the backing: %v", err)
+	}
+	if row.Title != "order:dolt-health" {
+		t.Errorf("landed title = %q, want order:dolt-health", row.Title)
+	}
+
+	announced := 0
+	for _, evt := range beadEvents(readCityJournal(t, cityPath)) {
+		if evt.Subject == created.ID && evt.Type == events.BeadCreated {
+			announced++
+		}
+	}
+	if announced != 1 {
+		t.Fatalf("the fallback create appended %d bead.created row(s) for %s, want exactly 1", announced, created.ID)
+	}
+}
+
 // The emitter carries every method either engine declares
 // (TestEmittingClassStoreKeepsEveryEngineCapability), so it claims some
 // capabilities an engine it wraps does not have. Each such claim must answer
@@ -1761,6 +1825,11 @@ func TestEmittingClassStoreOverClaimsArePinnedPerEngine(t *testing.T) {
 		},
 		reflect.TypeOf(&beads.SQLiteStore{}): {
 			"ConditionalWritesModeSource", "Count",
+			// A SQLite binding has no per-create actor; the wrapper takes the
+			// plain create, which stamps the store's own actor — the path a
+			// caller takes when the capability is absent — and still writes and
+			// announces the bead.
+			"CreateWithActor",
 			"DepMetadataAbsentByProtocol",
 			"EventsJournalActive", "NamespaceCensusHandle", "ReadEventsJournalPage",
 			// GetExactBatch over a SQLite binding reports

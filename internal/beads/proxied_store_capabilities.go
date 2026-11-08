@@ -35,6 +35,7 @@ import (
 //     graph-apply (H4) and CachingStore's dependency-snapshot shortcut.
 var (
 	_ Store                            = (*ProxiedStore)(nil)
+	_ ActorCreateStore                 = (*ProxiedStore)(nil)
 	_ AtomicTxStore                    = (*ProxiedStore)(nil)
 	_ BatchDeleter                     = (*ProxiedStore)(nil)
 	_ ConditionalAssignmentReleaser    = (*ProxiedStore)(nil)
@@ -473,6 +474,27 @@ func (s *ProxiedStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, er
 	var out Bead
 	err := s.withMutation("create-with-storage", func(Store) error {
 		created, err := creator.CreateWithStorage(b, storage)
+		out = created
+		return err
+	})
+	return out, err
+}
+
+// CreateWithActor creates a bead under an explicit actor, on the write leaf.
+//
+// Forwarded for the same reason CreateWithForeignID and CreateWithStorage are:
+// the write leaf is where an attribution is recorded, and this wrapper is what
+// the factory hands the caller. Dropping it would not fail loudly — the caller
+// falls back to the leaf's own actor — it would attribute the row to whoever
+// opened the store instead of to the actor the caller named.
+func (s *ProxiedStore) CreateWithActor(b Bead, actor string) (Bead, error) {
+	creator, ok := s.writeLeaf().(ActorCreateStore)
+	if !ok {
+		return s.Create(b)
+	}
+	var out Bead
+	err := s.withMutation("create-with-actor", func(Store) error {
+		created, err := creator.CreateWithActor(b, actor)
 		out = created
 		return err
 	})
