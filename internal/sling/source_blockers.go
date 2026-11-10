@@ -62,7 +62,7 @@ func SourceBlockerPreview(deps SlingDeps, beadID string) (SourceBlockerReport, e
 		return SourceBlockerReport{}, err
 	}
 
-	graphStore := deps.graphStore()
+	graphStore := deps.GraphStore
 	report := SourceBlockerReport{}
 	for _, id := range blockerIDs {
 		blocker, getErr := graphStore.Get(id)
@@ -120,8 +120,8 @@ func sourceBlockerIDs(deps SlingDeps, beadID string) (blockerIDs []string, remot
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("listing dependencies of %s: %w", beadID, err)
 	}
-	graphStore := deps.graphStore()
-	sameStore := deps.GraphStore == nil || beads.SameStore(deps.GraphStore, deps.Store)
+	graphStore := deps.GraphStore
+	sameStore := deps.GraphStore == (beads.GraphStore{}) || beads.SameStore(deps.GraphStore, deps.Store)
 	seen := make(map[string]bool, len(depsList))
 	for _, dep := range depsList {
 		if !beads.IsReadyBlockingDependencyType(dep.Type) {

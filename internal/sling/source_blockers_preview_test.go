@@ -176,7 +176,7 @@ func TestSourceBlockerPreviewUnresolvedBlocker(t *testing.T) {
 func TestSourceBlockerPreviewDepListError(t *testing.T) {
 	deps := sourceBlockerSlingDeps(t)
 	source, _ := seedPreviewBlocker(t, deps.Store, "blocks")
-	deps.Store = depListErrStore{Store: deps.Store, err: errors.New("boom")}
+	deps.Store = beads.WorkStore{Store: depListErrStore{Store: deps.Store, err: errors.New("boom")}}
 
 	_, err := SourceBlockerPreview(deps, source.ID)
 	if err == nil {

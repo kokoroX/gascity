@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/beadstest"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/orders"
 )
@@ -30,10 +31,10 @@ type orderActorStampingStore struct {
 	creates []orderActorStampedCreate
 }
 
-func newOrderActorStampingStore(actor, idPrefix string) *orderActorStampingStore {
+func newOrderActorStampingStore(idPrefix string) *orderActorStampingStore {
 	mem := beads.NewMemStore()
 	mem.IDPrefix = idPrefix
-	return &orderActorStampingStore{MemStore: mem, actor: actor}
+	return &orderActorStampingStore{MemStore: mem, actor: "controller"}
 }
 
 func (s *orderActorStampingStore) Create(b beads.Bead) (beads.Bead, error) {
@@ -73,7 +74,7 @@ func TestOrderDispatchStampsTrackingBeadWithOrderActor(t *testing.T) {
 	cityPath, cfg, a := newExecOrderFixture(t)
 	workStore := beads.NewMemStore()
 	workStore.IDPrefix = "mc"
-	binding := newOrderActorStampingStore("controller", "gcg")
+	binding := newOrderActorStampingStore("gcg")
 
 	var rec memRecorder
 	m := newSplitOrderDispatcher(t, cityPath, cfg, []orders.Order{a}, workStore, binding, &rec)
@@ -115,13 +116,38 @@ func TestOrderDispatchStampsTrackingBeadWithOrderActor(t *testing.T) {
 // through both layers — a layer that dropped the capability would not fail, it
 // would quietly attribute the tracking bead to the controller again.
 func TestOrderTrackingActorSurvivesTheControllerStoreChain(t *testing.T) {
-	backing := newOrderActorStampingStore("controller", "gc")
+	backing := newOrderActorStampingStore("gc")
 	cached := beads.NewCachingStore(backing, nil)
 	policy := wrapStoreWithBeadPolicies(cached, &config.City{})
 	st := orders.NewStore(beads.OrdersStore{Store: policy})
 
 	if _, err := st.CreateRun("dolt-health", orders.RunOpts{Actor: "order:dolt-health"}); err != nil {
 		t.Fatalf("CreateRun through the controller's store chain: %v", err)
+	}
+
+	creates := backing.stampedCreates()
+	if len(creates) != 1 {
+		t.Fatalf("leaf creates = %+v, want exactly the one tracking bead", creates)
+	}
+	if !creates[0].viaCap || creates[0].actor != "order:dolt-health" {
+		t.Errorf("tracking bead reached the leaf as created_by %q (named=%v), want order:dolt-health", creates[0].actor, creates[0].viaCap)
+	}
+}
+
+// TestOrderTrackingActorSurvivesTheResidencyLegChain pins the same attribution
+// through the class layers the residency layer hands out (typed-stores T7a): a
+// federated leg under a resident handle under the orders class handle. None of
+// those layers promotes the capability by embedding; beads.As peels each class
+// layer, so the per-create actor still reaches the leaf.
+func TestOrderTrackingActorSurvivesTheResidencyLegChain(t *testing.T) {
+	backing := newOrderActorStampingStore("gc")
+	cached := beads.NewCachingStore(backing, nil)
+	policy := wrapStoreWithBeadPolicies(cached, &config.City{})
+	resident := beadstest.ResidentLeg(beadstest.FederatedLeg(policy))
+	st := orders.NewStore(beadstest.Orders(resident))
+
+	if _, err := st.CreateRun("dolt-health", orders.RunOpts{Actor: "order:dolt-health"}); err != nil {
+		t.Fatalf("CreateRun through the residency leg chain: %v", err)
 	}
 
 	creates := backing.stampedCreates()
