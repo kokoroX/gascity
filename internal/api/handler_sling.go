@@ -201,12 +201,14 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 			return s.sourceWorkflowStores(), nil
 		},
 		SourceWorkflowScanIncomplete: func() bool {
-			if s.state.CityBeadStore() == nil {
+			// The scan is incomplete when a store it should cover has no
+			// handle this epoch: no city work store, or a configured rig
+			// whose store did not open (Stores.Rig reports false for it).
+			if st.Work() == (beads.WorkStore{}) {
 				return true
 			}
-			stores := s.state.BeadStores() // residency:allow — only checks whether the supplied scan omitted a configured rig; reads no bead or owner
 			for _, rig := range s.state.Config().Rigs {
-				if stores[rig.Name] == nil {
+				if _, ok := st.Rig(rig.Name); !ok {
 					return true
 				}
 			}

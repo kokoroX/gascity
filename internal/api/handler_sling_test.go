@@ -18,6 +18,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/dispatch"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/formulatest"
 	"github.com/gastownhall/gascity/internal/molecule"
@@ -838,6 +839,108 @@ title = "Do work"
 	}
 	if !strings.Contains(respWarning, "revision") {
 		t.Fatalf("response warning = %q, want it to name the rig:stale scan error", respWarning)
+	}
+}
+
+// TestSlingSourceWorkflowScanIncompleteGatesBlockerWhenAConfiguredRigIsUnopened
+// pins execSling's SourceWorkflowScanIncomplete wiring to the epoch's class
+// handles. A configured rig whose store the epoch did not open is a hole in
+// the source-workflow scan, so the launch must not trust a blocker it found
+// closed in the stores it could read: sourceBlockerIDs' `unread` keeps a
+// cross-store gate for it (internal/sling/source_blockers.go). With every
+// configured rig open the scan is complete, the closed copy settles the
+// blocker directly and no gate is minted. The graph class is relocated so the
+// selected rig's work store and the graph store are distinct; otherwise the
+// blocker is local to the graph store (sameStore) and the remote scan never
+// runs.
+func TestSlingSourceWorkflowScanIncompleteGatesBlockerWhenAConfiguredRigIsUnopened(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		unopenedRig bool
+		wantGates   int
+	}{
+		{name: "configured rig without an open store", unopenedRig: true, wantGates: 1},
+		{name: "every configured rig open", unopenedRig: false, wantGates: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enableGraphV2 := lockGraphV2SlingFlagsForTest(t)
+			srv, state := newSlingTestServer(t)
+			enableGraphV2()
+			formulaDir := t.TempDir()
+			state.cfg.FormulaLayers.City = []string{formulaDir}
+			state.cfg.Agents = append(state.cfg.Agents,
+				config.Agent{Name: config.ControlDispatcherAgentName, MaxActiveSessions: intPtr(1)},
+				config.Agent{Name: config.ControlDispatcherAgentName, Dir: "myrig", MaxActiveSessions: intPtr(1)},
+			)
+			if err := os.WriteFile(filepath.Join(formulaDir, "graph-work.toml"), []byte(`
+formula = "graph-work"
+version = 2
+contract = "graph.v2"
+
+[[steps]]
+id = "step"
+title = "Do work"
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// The city and graph stores are open and distinct from myrig's work
+			// store, so the only scan gap the cases vary is the rig leg. (The
+			// accessor check this test pinned short-circuits on a nil city
+			// store, which would make both cases look incomplete.)
+			state.cityBeadStore = beads.NewMemStore()
+			state.graphBeadStore = beads.NewMemStore()
+			if tc.unopenedRig {
+				state.cfg.Rigs = append(state.cfg.Rigs, config.Rig{Name: "unopened", Path: "/tmp/unopened", Prefix: "UN"})
+			}
+			store := state.stores["myrig"]
+			source, err := store.Create(beads.Bead{Title: "test task", Type: "task"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			blocker, err := store.Create(beads.Bead{Title: "closed blocker", Type: "task"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(blocker.ID); err != nil {
+				t.Fatalf("closing blocker %s: %v", blocker.ID, err)
+			}
+			if err := store.DepAdd(source.ID, blocker.ID, "blocks"); err != nil {
+				t.Fatalf("DepAdd(%s -> %s): %v", source.ID, blocker.ID, err)
+			}
+
+			body := `{"target":"myrig/worker","formula":"graph-work","attached_bead_id":"` + source.ID + `"}`
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, newPostRequest(cityURL(state, "/sling"), strings.NewReader(body)))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+			}
+			var resp struct {
+				Status     string `json:"status"`
+				WorkflowID string `json:"workflow_id"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Status != "slung" {
+				t.Fatalf("status = %q, want slung", resp.Status)
+			}
+			if resp.WorkflowID == "" {
+				t.Fatal("workflow_id empty, want the graph.v2 launch to mint a root")
+			}
+
+			gates, err := state.graphBeadStore.List(beads.ListQuery{Label: dispatch.CrossStoreGateLabel})
+			if err != nil {
+				t.Fatalf("listing cross-store gates: %v", err)
+			}
+			if len(gates) != tc.wantGates {
+				t.Fatalf("cross-store gates = %d, want %d (blocker %s found closed in a scanned store); scan incomplete = %v",
+					len(gates), tc.wantGates, blocker.ID, tc.unopenedRig)
+			}
+			if tc.wantGates == 1 && gates[0].Metadata[beadmeta.CrossStoreBlockerMetadataKey] != blocker.ID {
+				t.Fatalf("gate metadata = %v, want it to name blocker %s", gates[0].Metadata, blocker.ID)
+			}
+		})
 	}
 }
 

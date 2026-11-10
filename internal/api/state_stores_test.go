@@ -155,8 +155,6 @@ var reviewedResidueCallers = map[string]int{
 	"handler_convoy_dispatch.go workflowStoresWith CityBeadStore":         1,
 	"handler_convoys.go isGraphConvoyID BeadStores":                       1,
 	"handler_convoys.go isGraphConvoyID CityBeadStore":                    1,
-	"handler_sling.go Server.execSling BeadStores":                        1, // sourceWorkflowScanIncomplete's presence check (residency:allow): reads no bead or owner
-	"handler_sling.go Server.execSling CityBeadStore":                     1, // sourceWorkflowScanIncomplete's presence check (residency:allow): reads no bead or owner
 	"handler_sling.go Server.sourceWorkflowStores BeadStores":             2,
 	"handler_sling.go Server.sourceWorkflowStores CityBeadStore":          1,
 	"handler_status.go Server.statusSessionSnapshot CityBeadStore":        1,
