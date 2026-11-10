@@ -362,6 +362,10 @@ test internal/sling TestSourceBlockerPreviewRemoteBlockerNeedsGate
 test internal/sling TestSourceBlockerPreviewUnresolvedBlocker
 test internal/sling TestSourceBlockerPreviewDepListError
 
+# chore/merge-upstream-20261110 — PR #57's per-create order actor must reach
+# the leaf through the typed-stores T7a residency leg/class-handle layers.
+test cmd/gc TestOrderTrackingActorSurvivesTheResidencyLegChain
+
 # --- build-config pins: not tests, restored configuration lines ---
 
 # 5438c9aa5 — restores the unit-build dolt pin that a merge of main dropped:

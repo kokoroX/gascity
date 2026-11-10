@@ -1734,7 +1734,7 @@ func TestMainStoreSessionCreateOverAnEngineWithoutStorageCreate(t *testing.T) {
 // it would attribute every order-tracking bead to whoever opened the store.
 func TestEmittingClassStoreForwardsCreateWithActor(t *testing.T) {
 	cityPath := t.TempDir()
-	backing := newOrderActorStampingStore("controller", "gcg")
+	backing := newOrderActorStampingStore("gcg")
 	wrapped := &emittingClassStore{Store: backing, cityPath: cityPath}
 
 	created, err := wrapped.CreateWithActor(beads.Bead{Title: "order:dolt-health"}, "order:dolt-health")

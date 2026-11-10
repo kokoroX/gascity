@@ -62,7 +62,7 @@ func runDryRunSingle(t *testing.T, cfg *config.City, a config.Agent, store beads
 
 	runner := newFakeRunner()
 	deps, out, errOut := testDeps(cfg, runtime.NewFake(), runner.run)
-	deps.Store = store
+	deps = slingDepsWithStore(deps, store)
 	opts := testOpts(a, dryRunSourceBead)
 	opts.OnFormula = onFormula
 	opts.DryRun = true
@@ -181,7 +181,7 @@ func TestDryRunBatchGraphV2FormulaReportsSourceBlockers(t *testing.T) {
 	q.beadsByID["BL-2"] = listing[1]
 
 	deps, stdout, stderr := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
-	deps.Store = store
+	deps = slingDepsWithStore(deps, store)
 	opts := testOpts(a, "CVY-1")
 	opts.DryRun = true
 	if code := dryRunBatch(opts, deps, stdout, stderr, convoy, listing, listing, q); code != 0 {
@@ -205,7 +205,7 @@ func TestDryRunBatchLegacySourceBlockerLookupErrors(t *testing.T) {
 	children := []beads.Bead{{ID: "BL-1", Status: "open"}, {ID: "BL-2", Status: "open"}}
 	q := newFakeChildQuerier()
 	deps, stdout, stderr := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
-	deps.Store = depListFailingStore{Store: seededStore("BL-1", "BL-2")}
+	deps = slingDepsWithStore(deps, depListFailingStore{Store: seededStore("BL-1", "BL-2")})
 	opts := testOpts(a, "CVY-1")
 	opts.DryRun = true
 	if code := dryRunBatch(opts, deps, stdout, stderr, beads.Bead{ID: "CVY-1", Type: "convoy", Status: "open"}, children, children, q); code != 0 {
@@ -225,9 +225,9 @@ func TestDryRunSourceBlockerUnresolvedDirectAndGate(t *testing.T) {
 			t.Fatal(err)
 		}
 		deps, _, _ := testDeps(graphV2DryRunCity(t), runtime.NewFake(), newFakeRunner().run)
-		deps.Store = store
+		deps = slingDepsWithStore(deps, store)
 		if split {
-			deps.GraphStore = beads.NewMemStore()
+			deps.GraphStore = beads.GraphStore{Store: beads.NewMemStore()}
 		}
 		var lines []string
 		dryRunSourceBlockerSection(func(line string) { lines = append(lines, line) }, deps, dryRunSourceBead, true)
@@ -305,7 +305,7 @@ func TestDryRunSourceBlockersStoreIsUnchanged(t *testing.T) {
 	q.childrenOf["BL-42"] = []beads.Bead{}
 	runner := newFakeRunner()
 	deps, stdout, stderr := testDeps(cfg, runtime.NewFake(), runner.run)
-	deps.Store = store
+	deps = slingDepsWithStore(deps, store)
 	opts := testOpts(a, "BL-42")
 	opts.DryRun = true
 

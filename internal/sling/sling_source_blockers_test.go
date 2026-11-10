@@ -319,7 +319,7 @@ func TestSlingAttachGraphFormulaGatesRemoteSourceBlockers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		again, err := dispatch.EnsureCrossStoreGate(deps.GraphHandle, root, blocker.ID, true)
+		again, err := dispatch.EnsureCrossStoreGate(deps.GraphStore, root, blocker.ID, true)
 		if err != nil || again != gate.ID {
 			t.Fatalf("repeated gate lookup = %q, %v; want %q", again, err, gate.ID)
 		}
@@ -330,7 +330,7 @@ func TestSlingAttachGraphFormulaGatesRemoteSourceBlockers(t *testing.T) {
 		if err := deps.Store.Close(blocker.ID); err != nil {
 			t.Fatal(err)
 		}
-		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphHandle, func(_ []string) (dispatch.CrossStoreBlockerResolution, error) {
+		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphStore, func(_ []string) (dispatch.CrossStoreBlockerResolution, error) {
 			b, err := deps.Store.Get(blocker.ID)
 			if err != nil {
 				return dispatch.CrossStoreBlockerResolution{}, err
@@ -371,7 +371,7 @@ func TestSlingAttachGraphFormulaGatesRemoteSourceBlockers(t *testing.T) {
 				t.Fatalf("warning for found blocker: %s", warning)
 			}
 		}
-		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphHandle, func([]string) (dispatch.CrossStoreBlockerResolution, error) {
+		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphStore, func([]string) (dispatch.CrossStoreBlockerResolution, error) {
 			a, err := deps.Store.Get(blocker.ID)
 			if err != nil {
 				return dispatch.CrossStoreBlockerResolution{}, err
@@ -409,7 +409,7 @@ func TestSlingAttachGraphFormulaGatesRemoteSourceBlockers(t *testing.T) {
 		if !found {
 			t.Fatalf("warnings = %v; want missing blocker", result.BeadWarnings)
 		}
-		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphHandle, func([]string) (dispatch.CrossStoreBlockerResolution, error) {
+		report, err := dispatch.ReleaseCrossStoreGates(deps.GraphStore, func([]string) (dispatch.CrossStoreBlockerResolution, error) {
 			return dispatch.CrossStoreBlockerResolution{}, nil
 		})
 		if err != nil || len(report.Released) != 0 {
